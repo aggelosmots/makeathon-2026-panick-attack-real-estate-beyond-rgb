@@ -424,7 +424,7 @@ def _process_enmap_soil_data(input_file: str) -> str:
     num_samples = len(df_cleaned)
     
     print("Computing soil chemical and organic properties...")
-    
+    # here the means are spectal 
     vis_mean = df_cleaned[[f'Band_{i}' for i in range(1, 41) if f'Band_{i}' in df_cleaned.columns]].mean(axis=1)
     predicted_som = 6.5 - (vis_mean * 3.5) + np.random.normal(0, 0.1, size=num_samples)
     predicted_soc = predicted_som / 1.724
@@ -443,6 +443,11 @@ def _process_enmap_soil_data(input_file: str) -> str:
     swir1_mean = df_cleaned[[f'Band_{i}' for i in range(100, 150) if f'Band_{i}' in df_cleaned.columns]].mean(axis=1)
     predicted_mg = 50.0 + (swir1_mean * 120) - (vis_mean * 25) + np.random.normal(0, 5, size=num_samples)
    
+    ndvi = (df_cleaned['Band_80'] - df_cleaned['Band_40']) / (df_cleaned['Band_80'] + df_cleaned['Band_40'] + 1e-5)
+    swi = df_cleaned['Band_200'] / (df_cleaned['Band_80'] + 1e-5)
+
+    
+
     output_df = pd.DataFrame({
         'Pixel_ID': df_cleaned['Pixel_ID'],
         'pH_Assessment': np.round(predicted_ph, 2),
@@ -451,27 +456,33 @@ def _process_enmap_soil_data(input_file: str) -> str:
         'Potassium_K_mg_kg': np.round(predicted_k, 1),
         'Magnesium_Mg_mg_kg': np.round(predicted_mg, 1),
         'SOM_pct': np.round(predicted_som, 2),
-        'SOC_pct': np.round(predicted_soc, 2)
+        'SOC_pct': np.round(predicted_soc, 2),
+        'NDVI': np.round(ndvi, 3),
+        'SWI': np.round(swi, 3)
     })
-
+    # here the mean is the mean of all pixels in the tif (topological mean) not the spectral mean
     summary_stats = output_df.describe().transpose()
     ph_mean = summary_stats.loc['pH_Assessment', 'mean']
     som_mean = summary_stats.loc['SOM_pct', 'mean']
+    soc_mean = summary_stats.loc['SOC_pct', 'mean']
 
-    if ph_mean < 6.0:
+    # PH Interpretations
+    if ph_mean < 5.0:
+        ph_status = "Very Acidic"
+    elif ph_mean < 6.0 and ph_mean >= 5.0:
         ph_status = "Slightly Acidic"
-        ph_advice = "Monitor acid-sensitive crops. No immediate liming required but watch boundaries."
     elif 6.0 <= ph_mean <= 7.2:
         ph_status = "Optimal / Near-Neutral"
-        ph_advice = "Ideal range. Maximum availability of Phosphorus, Nitrogen, and trace elements."
     else:
         ph_status = "Alkaline"
-        ph_advice = "Watch for potential micronutrient lockup (Zinc, Iron)."
-
+    
+    # SOM Interpretations
     if som_mean > 3.0:
         som_status = "Excellent Structural Resilience"
     else:
         som_status = "Low Organic Buffer"
+    
+    # Soil Chemical Interpretations
 
     if Nitrogen_N_pct := summary_stats.loc['Nitrogen_N_pct', 'mean'] < 0.15:
         n_status = "Deficient"
@@ -498,11 +509,9 @@ def _process_enmap_soil_data(input_file: str) -> str:
     soil_report_text = f"""
     [CHEMICAL CHARACTERISTICS]
     Soil pH Profile     : {ph_mean:.2f} ({ph_status})  [Range: {summary_stats.loc['pH_Assessment', 'min']:.2f} - {summary_stats.loc['pH_Assessment', 'max']:.2f}]
-    Agronomic Advice    : {ph_advice}
     [ORGANIC MATTER & CARBON STRUCTURE]
     Soil Organic Matter : {som_mean:.2f}% ({som_status})
-    Soil Organic Carbon : 2.48%
-    Hydrological Note   : High SOM improves crop resilience but prolongs drying periods post-flood.
+    Soil Organic Carbon : {soc_mean:.2f}%
     [MACRONUTRIENT RESERVES ANALYSIS]
     Total Nitrogen (N)  : {summary_stats.loc['Nitrogen_N_pct', 'mean']:.3f}%  ({n_status})
     Phosphorus (P)      : {summary_stats.loc['Phosphorus_P_mg_kg', 'mean']:.2f} mg/kg   ({p_status})
@@ -511,6 +520,8 @@ def _process_enmap_soil_data(input_file: str) -> str:
     """
     print(soil_report_text)
     return soil_report_text ,output_df
+
+@mcp.tool()
 
 
 @mcp.tool()
