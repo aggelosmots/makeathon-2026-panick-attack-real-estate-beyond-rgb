@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 import json
 import re
+from pathlib import Path
 from typing import Any
 
 import httpx
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
+from src.common_config import DATA_ROOT as CONFIGURED_DATA_ROOT
 from src.common_config import env_int, env_str
 
 ### These environment variables can be set in the .env file or in the environment. 
@@ -20,20 +23,23 @@ HF_MODEL        = env_str("HF_MODEL", "google/gemma-3-27b-it")
 HF_MAX_COMPLETION_TOKENS = env_int("HF_MAX_COMPLETION_TOKENS", 4096)
 MCP_SERVER_URL  = env_str("MCP_SERVER_URL", "http://localhost:8000/mcp")
 AGENT_MAX_STEPS = env_int("AGENT_MAX_STEPS", 20)
+LOCAL_DATA_ROOT = Path("data").resolve()
+DATA_ROOT = LOCAL_DATA_ROOT if not CONFIGURED_DATA_ROOT.exists() and LOCAL_DATA_ROOT.exists() else CONFIGURED_DATA_ROOT
+MCP_TOOL_LOG_PATH = DATA_ROOT / "mcp_tool_calls.jsonl"
 
 ###
 ###         WE NEED TO CREATE THE AGENT PROMPT
-SYSTEM_PROMPT = """ You are an Expert Earth Observation Data Analyst and Real Estate Investment Advisor. Your absolute priority is objective mathematical accuracy, verifiable truth, and complete transparency. You must evaluate four land crop areas (Arkadia, Magnisia, Arkadia_2, Veroia) of approximately 250,000 m² each, priced at roughly 1 million euros, to identify the safest, highest-yielding investment. 
-You have access to MCP tools that inspect EnMap hyperspectral satellite data. You must execute these tools to extract empirical data (e.g., NDVI, Standard Deviation, Reflectance) BEFORE drawing any conclusions.
+SYSTEM_PROMPT = """ You are an Expert Earth Observation Data Analyst and Real Estate Investment Advisor. Your absolute priority is objective accuracy, verifiable truth, and complete transparency. You must evaluate four land crop areas provided 
+of approximately 250,000 m^2 each, priced at roughly 1 million euros each, to identify the safest, highest-yielding investment. 
+You have access to MCP tools that provide features and characterize the datasets. You must execute these tools to extract 
+empirical information from which all conclusions are based on.
 
 You are bound by the following absolute constraints:
-* SHOULD always tell the truth. Never make up information, speculate, or guess.
-* SHOULD base all statements on verifiable, factual data extracted directly from the MCP tools.
-* SHOULD explicitly state "I cannot confirm this due to missing data" if a file or metric cannot be accessed.
-* SHOULD prioritize accuracy over speed. Take all necessary computational steps to verify array outputs before presenting them.
-* SHOULD maintain objectivity. Remove all personal bias, assumptions, and opinion.
-* SHOULD clearly cite the source of every claim (e.g., "Based on Band 85 of the Veroia .tif file...").
-* SHOULD explain reasoning step-by-step and explicitly show how any numerical figure (like a composite score or percentage) was calculated.
+* MUST always tell the truth. Never make up information, speculate, or guess.
+* MUST base all statements on verifiable, factual data extracted directly from the MCP tools.
+* MUST explicitly state "I cannot confirm this due to missing data" if a file or metric cannot be accessed.
+* MUST prioritize accuracy over speed. Take all necessary computational steps to verify array outputs before presenting them.
+* MUST maintain objectivity. Remove all personal bias, assumptions, and opinion.
 * AVOID fabricating facts, quotes, tool outputs, or data arrays.
 * AVOID presenting speculation, rumor, or assumption as fact.
 * AVOID inventing tool failures, API limitations, pricing limits, or missing files. Only report an error if the tool explicitly returns one, using the exact error text.
@@ -42,12 +48,18 @@ You are bound by the following absolute constraints:
 When the user asks for visual output, charts, graphics, plots, maps, or selected-parcel visualization:
 * MUST use MCP tool output only. Never invent, estimate, mock, or fill parcel geometry, coordinates, chart values, labels, metrics, axes, units, or plot data.
 * MUST identify exactly one selected parcel from the user's request, prior UI context, or MCP tool result. If multiple parcels are possible and no selected parcel is clear, ask the user to select one.
-* SHOULD call `build_parcel_visualization` when a single selected parcel is available. Use `list_data_files`, `inspect_geotiff`, or `analyze_enmap_parcel` only as needed to identify or validate the parcel.
-* SHOULD call the plot tools when the user explicitly asks for plots/figures: `plot_ph_profile`, `plot_nitrogen_profile`, `plot_phosphorus_profile`, `plot_potassium_profile`, `plot_magnesium_profile`, `plot_som_profile`, `plot_ndvi_vs_swi_scatter`, `render_agromanagement_textbox`, or `create_agromanagement_plot_suite`.
+* MUST call the plot tools when the user explicitly asks for plots/figures: `plot_ph_profile`, `plot_nitrogen_profile`, `plot_phosphorus_profile`, `plot_potassium_profile`, `plot_magnesium_profile`, `plot_som_profile`, `plot_ndvi_vs_swi_scatter`, `render_agromanagement_textbox`, or `create_agromanagement_plot_suite`.
+* MUST NOT describe pH, nitrogen, phosphorus, potassium, magnesium, SOM, SOC, or any soil chemistry value as verified unless the MCP tool result came from a measured table containing that exact field.
+* MUST treat `insufficient_data` plot results as a correct outcome, not a failure to hide. Tell the user which measured field is missing.
 * MUST return the saved plot paths from the MCP tool results so the frontend can display or download them.
 * MUST validate that geometry and metrics are present before returning visualizations. If data is insufficient, return a structured response explaining the missing fields.
-* MUST return a JSON-compatible structure that the frontend can render directly. Include `type`, `source`, `parcel`, `visualizations`, `metadata.tools_used`, `metadata.data_validation`, warnings, labels, legends, axes, units, and rendering instructions.
 * MUST omit any chart or graphic whose required data was not returned by MCP tools.
+
+When the user asks for a parcel report, geo/risk report, investment report, full analysis, saved report, or report with plots:
+* MUST call `run_full_geo_report_flow` with the selected parcel paths before writing the final answer.
+* MUST use the `report_markdown`, `report_file`, `data_file`, and `plots` returned by `run_full_geo_report_flow` as the source for the final answer.
+* MUST mention the saved report file, saved tool-output data file, and every successful plot path returned by the tool.
+* MUST NOT manually recreate the multi-step report flow if `run_full_geo_report_flow` is available.
 
 Deliver a continuous, jargon-free business report that gives the user the results immediately. Do not use raw tool call syntax in the final text. Structure your output exactly as follows:
 
@@ -58,11 +70,7 @@ Deliver a continuous, jargon-free business report that gives the user the result
 [Explain in plain, business-friendly English WHY this parcel won, citing the specific risk-reduction and crop-yield metrics.]
 
 3. VERIFIED DATA COMPARISON
-[Present a clean data matrix/table comparing the 4 parcels. You MUST include:]
-- Mean NDVI (Vegetation Health)
-- NDVI Standard Deviation (Field Uniformity / Risk Indicator)
-- Healthy Coverage Percentage
-- [Explicitly state the mathematical formula used to rank them]
+[Present a clean data matrix/table comparing the 4 parcels. You must include the metrics returned from the MCP tools only not fabricated values.]
 
 4. METHODOLOGY & SOURCING
 [Clearly list exactly which files, spectral bands, and calculations were used to derive these numbers so the user can verify them.]
@@ -71,18 +79,16 @@ Deliver a continuous, jargon-free business report that gives the user the result
 [Explicitly list any data points that could not be verified, or explicitly state "All core metrics successfully verified."]
 
 6. FIGURES
-[Include compact chart-ready values for the user interface. Use one line per parcel with: parcel name, mean NDVI, NDVI standard deviation, healthy coverage percentage, and final score. Do not include fabricated values.]
+[For parcel comparison reports, MUST call `create_parcel_metric_chart` when comparison metrics are available, then list the returned saved figure path. For selected parcel figure requests, call the specific plot tool or `create_agromanagement_plot_suite`. Never say no figures are provided just because the user did not name a plot if a comparison chart can be generated from verified MCP results.]
 
-Before outputting your response, you must internally evaluate: "Is every statement in my response verifiable, supported by real tool data, free of fabrication, and transparently cited? Have I shown how I calculated my numbers?" If not, revise until it is.
+Before outputting your response, you must internally evaluate: "Is every statement in my response verifiable, supported by real tool data, free of fabrication? Have I shown how I calculated my numbers?" If not, revise until it is.
 """
 
 class ModelAPIError(RuntimeError):
     """Raised when a model provider request fails with telemetry attached."""
-
     def __init__(self, message: str, telemetry: dict[str, Any] | None = None) -> None:
         super().__init__(message)
         self.telemetry = telemetry or {}
-
 
 def _obj_to_dict(obj: Any) -> Any:
     if isinstance(obj, dict):
@@ -93,19 +99,19 @@ def _obj_to_dict(obj: Any) -> Any:
         return obj.dict()
     return obj
 
-
 def default_model_for_provider(provider: str | None = None) -> str:
+    # Note: supported only HF models for this use case, but can be extended to other providers as needed
+    # It was tested with Qrok and local Ollama. 
     provider = (provider or MODEL_PROVIDER).strip().lower()
     if provider == "huggingface":
         return HF_MODEL
     return HF_MODEL
 
-
 def _mcp_tool_to_openai_schema(tool: Any) -> dict[str, Any]:
-    tool_dict = _obj_to_dict(tool)
-    name = tool_dict.get("name", "")
+    tool_dict   = _obj_to_dict(tool)
+    name        = tool_dict.get("name", "")
     description = (tool_dict.get("description") or f"MCP tool: {name}").split("\n\n")[0].strip()
-    parameters = (
+    parameters  = (
         tool_dict.get("inputSchema")
         or tool_dict.get("input_schema")
         or {"type": "object", "properties": {}}
@@ -114,9 +120,9 @@ def _mcp_tool_to_openai_schema(tool: Any) -> dict[str, Any]:
     return {
         "type": "function",
         "function": {
-            "name": name,
-            "description": description,
-            "parameters": parameters,
+            "name"          : name,
+            "description"   : description,
+            "parameters"    : parameters,
         },
     }
 
@@ -141,12 +147,29 @@ def _tool_result_to_text(result: Any) -> str:
     return json.dumps(result_dict, ensure_ascii=False, default=str)
 
 
+def _append_mcp_tool_log(tool_name: str, arguments: dict[str, Any], result_text: str) -> None:
+    entry = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "mcp_server_url": MCP_SERVER_URL,
+        "tool": tool_name,
+        "arguments": arguments,
+        "output": result_text,
+    }
+    try:
+        DATA_ROOT.mkdir(parents=True, exist_ok=True)
+        with MCP_TOOL_LOG_PATH.open("a", encoding="utf-8") as log_file:
+            log_file.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
+    except Exception:
+        # Logging must never break the user-facing agent run.
+        return
+
+
+# used only for MCP tools. Can be removed
 def _exception_summary(exc: BaseException) -> str:
     sub_exceptions = getattr(exc, "exceptions", None)
     if sub_exceptions:
         return "; ".join(_exception_summary(sub_exc) for sub_exc in sub_exceptions)
     return f"{type(exc).__name__}: {exc}"
-
 
 def _api_error_message(response: httpx.Response) -> str:
     try:
@@ -156,6 +179,7 @@ def _api_error_message(response: httpx.Response) -> str:
 
     if isinstance(payload, dict) and payload.get("error"):
         error = payload["error"]
+        # known error retunrned -> print/display/show/log
         if isinstance(error, dict) and error.get("message"):
             return str(error["message"])
         return str(error)
@@ -191,12 +215,13 @@ def _parse_rate_limit_message(message: str) -> dict[str, Any]:
 
 
 def _response_telemetry(
-    provider: str,
-    model: str,
-    response: httpx.Response,
-    payload: dict[str, Any] | None = None,
+    provider     : str,
+    model        : str,
+    response     : httpx.Response,
+    payload      : dict[str, Any] | None = None,
     error_message: str | None = None,
 ) -> dict[str, Any]:
+   
     telemetry: dict[str, Any] = {
         "provider": provider,
         "model": model,
@@ -244,6 +269,48 @@ def _tool_failures(trace: list[dict[str, Any]]) -> list[dict[str, str]]:
     return failures
 
 
+def _json_tool_preview(step: dict[str, Any]) -> dict[str, Any] | None:
+    preview = step.get("result_full") or step.get("result_preview")
+    if not preview:
+        return None
+    try:
+        payload = json.loads(str(preview))
+    except json.JSONDecodeError:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _full_flow_report_markdown(trace: list[dict[str, Any]]) -> str | None:
+    for step in reversed(trace):
+        if step.get("tool") != "run_full_geo_report_flow":
+            continue
+        stored_report = str(step.get("full_flow_report_markdown") or "").strip()
+        if stored_report:
+            artifact_lines = ["", "## Saved Artifacts", ""]
+            for line in step.get("full_flow_artifacts") or []:
+                artifact_lines.append(f"- {line}")
+            return stored_report + "\n" + "\n".join(artifact_lines)
+        payload = _json_tool_preview(step)
+        if not payload or not payload.get("success"):
+            continue
+        report = str(payload.get("report_markdown") or "").strip()
+        if not report:
+            continue
+
+        artifact_lines = ["", "## Saved Artifacts", ""]
+        report_file = payload.get("report_file") or {}
+        data_file = payload.get("data_file") or {}
+        if report_file.get("relative_path"):
+            artifact_lines.append(f"- Report markdown: `{report_file['relative_path']}`")
+        if data_file.get("relative_path"):
+            artifact_lines.append(f"- Tool-output data: `{data_file['relative_path']}`")
+        for plot in payload.get("plots") or []:
+            if plot.get("relative_path"):
+                artifact_lines.append(f"- Figure: `{plot['relative_path']}`")
+        return report + "\n" + "\n".join(artifact_lines)
+    return None
+
+
 def _sanitize_answer(answer: str, trace: list[dict[str, Any]]) -> str:
     cleaned_lines: list[str] = []
     raw_tool_call_pattern = re.compile(r"^\s*[A-Za-z_][A-Za-z0-9_]*\([^)]*\)\s*$")
@@ -260,6 +327,10 @@ def _sanitize_answer(answer: str, trace: list[dict[str, Any]]) -> str:
     cleaned = "\n".join(cleaned_lines).strip()
     if not cleaned:
         cleaned = "The analysis completed, but the model did not return a stable report."
+
+    full_flow_report = _full_flow_report_markdown(trace)
+    if full_flow_report:
+        cleaned = full_flow_report
 
     failures = _tool_failures(trace)
     if failures:
@@ -538,6 +609,25 @@ async def _run_huggingface_agent(
                 except Exception as exc:
                     tool_result = f"Tool error: {type(exc).__name__}: {exc}"
 
+                _append_mcp_tool_log(tool_name, arguments, tool_result)
+                if tool_name == "run_full_geo_report_flow":
+                    try:
+                        flow_payload = json.loads(tool_result)
+                    except json.JSONDecodeError:
+                        flow_payload = {}
+                    if isinstance(flow_payload, dict):
+                        trace[-1]["full_flow_report_markdown"] = flow_payload.get("report_markdown", "")
+                        artifacts = []
+                        report_file = flow_payload.get("report_file") or {}
+                        data_file = flow_payload.get("data_file") or {}
+                        if report_file.get("relative_path"):
+                            artifacts.append(f"Report markdown: `{report_file['relative_path']}`")
+                        if data_file.get("relative_path"):
+                            artifacts.append(f"Tool-output data: `{data_file['relative_path']}`")
+                        for plot in flow_payload.get("plots") or []:
+                            if plot.get("relative_path"):
+                                artifacts.append(f"Figure: `{plot['relative_path']}`")
+                        trace[-1]["full_flow_artifacts"] = artifacts
                 trace[-1]["result_preview"] = tool_result[:6000]
                 messages.append({
                     "role": "tool",

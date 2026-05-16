@@ -55,6 +55,9 @@ function markdownToHtml(markdown) {
   const lines = String(markdown || "").split(/\r?\n/);
   const html = [];
   let listType = null;
+  let paragraph = [];
+  let inFence = false;
+  let fenceLines = [];
 
   function closeList() {
     if (listType) {
@@ -63,29 +66,98 @@ function markdownToHtml(markdown) {
     }
   }
 
+  function closeParagraph() {
+    if (paragraph.length) {
+      html.push(`<p>${inline(paragraph.join(" "))}</p>`);
+      paragraph = [];
+    }
+  }
+
   function inline(text) {
     return escapeHtml(text)
+      .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img class="markdown-image" src="$2" alt="$1">')
+      .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>')
       .replace(/`([^`]+)`/g, "<code>$1</code>")
       .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
       .replace(/\*([^*]+)\*/g, "<em>$1</em>");
   }
 
-  for (const rawLine of lines) {
+  function isTableSeparator(line) {
+    return /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(line);
+  }
+
+  function tableCells(line) {
+    return line
+      .trim()
+      .replace(/^\|/, "")
+      .replace(/\|$/, "")
+      .split("|")
+      .map((cell) => cell.trim());
+  }
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const rawLine = lines[index];
     const line = rawLine.trim();
+    const nextLine = lines[index + 1]?.trim() || "";
+
+    if (line.startsWith("```")) {
+      closeParagraph();
+      closeList();
+      if (inFence) {
+        html.push(`<pre class="code-block"><code>${escapeHtml(fenceLines.join("\n"))}</code></pre>`);
+        fenceLines = [];
+        inFence = false;
+      } else {
+        inFence = true;
+      }
+      continue;
+    }
+
+    if (inFence) {
+      fenceLines.push(rawLine);
+      continue;
+    }
+
     if (!line) {
+      closeParagraph();
       closeList();
       continue;
     }
 
     const heading = line.match(/^(#{1,3})\s+(.+)$/);
     if (heading) {
+      closeParagraph();
       closeList();
       html.push(`<h${heading[1].length}>${inline(heading[2])}</h${heading[1].length}>`);
       continue;
     }
 
+    if (line.includes("|") && isTableSeparator(nextLine)) {
+      closeParagraph();
+      closeList();
+      const headers = tableCells(line);
+      index += 1;
+      const rows = [];
+      while (index + 1 < lines.length && lines[index + 1].trim().includes("|")) {
+        index += 1;
+        rows.push(tableCells(lines[index]));
+      }
+      html.push(`
+        <div class="markdown-table-wrap">
+          <table class="markdown-table">
+            <thead><tr>${headers.map((cell) => `<th>${inline(cell)}</th>`).join("")}</tr></thead>
+            <tbody>
+              ${rows.map((row) => `<tr>${headers.map((_, cellIndex) => `<td>${inline(row[cellIndex] || "")}</td>`).join("")}</tr>`).join("")}
+            </tbody>
+          </table>
+        </div>
+      `);
+      continue;
+    }
+
     const numbered = line.match(/^\d+\.\s+(.+)$/);
     if (numbered) {
+      closeParagraph();
       if (listType !== "ol") {
         closeList();
         html.push("<ol>");
@@ -97,6 +169,7 @@ function markdownToHtml(markdown) {
 
     const bullet = line.match(/^[-*]\s+(.+)$/);
     if (bullet) {
+      closeParagraph();
       if (listType !== "ul") {
         closeList();
         html.push("<ul>");
@@ -107,9 +180,13 @@ function markdownToHtml(markdown) {
     }
 
     closeList();
-    html.push(`<p>${inline(line)}</p>`);
+    paragraph.push(line);
   }
 
+  if (inFence) {
+    html.push(`<pre class="code-block"><code>${escapeHtml(fenceLines.join("\n"))}</code></pre>`);
+  }
+  closeParagraph();
   closeList();
   return html.join("");
 }
@@ -179,6 +256,8 @@ function extractPlotOutputs(result) {
   function addPlot(item) {
     if (!item || item.success === false || !item.relative_path) return;
     const path = String(item.relative_path);
+    const isPlotOutput = item.plot_name || item.chart_type || path.startsWith("plots/");
+    if (!isPlotOutput) return;
     if (seen.has(path)) return;
     seen.add(path);
     plots.push({

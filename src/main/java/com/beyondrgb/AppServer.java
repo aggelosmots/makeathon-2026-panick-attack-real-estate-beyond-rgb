@@ -255,13 +255,14 @@ public final class AppServer {
 
     private static boolean isDatasetFile(String name) {
         String lower = name.toLowerCase();
-        return lower.endsWith(".zip") || lower.endsWith(".tif") || lower.endsWith(".tiff");
+        return lower.endsWith(".zip") || lower.endsWith(".tif") || lower.endsWith(".tiff") || lower.endsWith(".csv");
     }
 
     private static String datasetType(String name) {
         String lower = name.toLowerCase();
         if (lower.endsWith(".zip")) return "zip";
         if (lower.endsWith(".tif") || lower.endsWith(".tiff")) return "raster";
+        if (lower.endsWith(".csv")) return "table";
         return "file";
     }
 
