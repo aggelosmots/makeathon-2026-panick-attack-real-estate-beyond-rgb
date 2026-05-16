@@ -1,0 +1,58 @@
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: template-ollama
+    profiles:
+      - ollama
+    restart: unless-stopped
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - ollama_models:/root/.ollama
+    # Uncomment on Linux hosts with NVIDIA Container Toolkit installed:
+    # gpus: all
+
+  mcp-tools:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: template-mcp-tools
+    restart: unless-stopped
+    command: python -m src.mcp_server.server
+    environment:
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: 8000
+      DATA_ROOT: ${CONTAINER_DATA_DIR:-/workspace/data}
+      ALLOW_WRITE_TO_DATA: ${ALLOW_WRITE_TO_DATA:-false}
+    volumes:
+      - ${HOST_DATA_DIR:-./data}:${CONTAINER_DATA_DIR:-/workspace/data}
+    ports:
+      - "${MCP_PORT:-8000}:8000"
+
+  agent-ui:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: template-agent-ui
+    restart: unless-stopped
+    command: streamlit run src/ui/app.py --server.address=0.0.0.0 --server.port=8501
+    depends_on:
+      - mcp-tools
+    environment:
+      MODEL_PROVIDER: ${MODEL_PROVIDER:-groq}
+      GROQ_API_BASE: ${GROQ_API_BASE:-https://api.groq.com/openai/v1}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GROQ_MODEL: ${GROQ_MODEL:-llama-3.1-8b-instant}
+      GROQ_MAX_COMPLETION_TOKENS: ${GROQ_MAX_COMPLETION_TOKENS:-512}
+      OLLAMA_HOST: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3:8b}
+      MCP_SERVER_URL: http://mcp-tools:8000/mcp
+      DATA_ROOT: ${CONTAINER_DATA_DIR:-/workspace/data}
+      AGENT_MAX_STEPS: ${AGENT_MAX_STEPS:-6}
+    volumes:
+      - ${HOST_DATA_DIR:-./data}:${CONTAINER_DATA_DIR:-/workspace/data}
+    ports:
+      - "${UI_PORT:-8501}:8501"
+
+volumes:
+  ollama_models:
