@@ -21,6 +21,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.Executors;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 
 public final class AppServer {
     private static final Path STATIC_DIR = Path.of("src", "main", "resources", "static");
@@ -59,6 +61,10 @@ public final class AppServer {
                 sendText(exchange, 200, "ok", "text/plain; charset=utf-8");
             } else if ("GET".equals(method) && "/api/state".equals(path)) {
                 sendJson(exchange, 200, statePayload());
+            } else if ("GET".equals(method) && "/api/datasets".equals(path)) {
+                sendJson(exchange, 200, Map.of("datasets", listDatasets()));
+            } else if ("GET".equals(method) && "/api/download".equals(path)) {
+                downloadReport(exchange);
             } else if ("POST".equals(method) && "/api/agent".equals(path)) {
                 runAgent(exchange);
             } else if ("POST".equals(method) && "/api/settings".equals(path)) {
@@ -89,11 +95,13 @@ public final class AppServer {
         if (prompt.isEmpty()) {
             throw new IllegalArgumentException("Enter a request before sending it.");
         }
+        List<Object> selectedDatasets = listValue(request.get("datasets"));
+        String agentPrompt = promptWithDatasets(prompt, selectedDatasets);
 
         synchronized (stateLock) {
-            state.chatHistory.add(Map.of("role", "user", "content", prompt));
+            state.chatHistory.add(Map.of("role", "user", "content", agentPrompt));
             Map<String, Object> bridgeRequest = new LinkedHashMap<>();
-            bridgeRequest.put("prompt", prompt);
+            bridgeRequest.put("prompt", agentPrompt);
             bridgeRequest.put("history", state.chatHistory.subList(0, state.chatHistory.size() - 1));
             bridgeRequest.put("provider", state.provider);
             bridgeRequest.put("model", state.model);
@@ -128,6 +136,22 @@ public final class AppServer {
         }
 
         sendJson(exchange, 200, statePayload());
+    }
+
+    private String promptWithDatasets(String prompt, List<Object> datasets) {
+        List<String> cleanDatasets = datasets.stream()
+            .map(AppServer::stringValue)
+            .map(String::trim)
+            .filter(value -> !value.isEmpty())
+            .toList();
+        if (cleanDatasets.isEmpty()) {
+            return prompt;
+        }
+
+        return prompt
+            + "\n\nSelected input datasets:\n"
+            + String.join("\n", cleanDatasets.stream().map(value -> "- " + value).toList())
+            + "\n\nUse only these selected datasets unless the user explicitly asks for other files.";
     }
 
     private void saveSettings(HttpExchange exchange) throws IOException {
@@ -197,6 +221,113 @@ public final class AppServer {
         }
 
         sendJson(exchange, 200, statePayload());
+    }
+
+    private List<Map<String, Object>> listDatasets() throws IOException {
+        Path dataRoot = dataRootPath();
+        if (!Files.isDirectory(dataRoot)) {
+            Path localData = Path.of("data").toAbsolutePath().normalize();
+            dataRoot = Files.isDirectory(localData) ? localData : dataRoot;
+        }
+        if (!Files.isDirectory(dataRoot)) {
+            return List.of();
+        }
+
+        Path root = dataRoot;
+        List<Map<String, Object>> datasets = new ArrayList<>();
+        try (var paths = Files.walk(root, 2)) {
+            paths
+                .filter(Files::isRegularFile)
+                .filter(path -> isDatasetFile(path.getFileName().toString()))
+                .sorted()
+                .forEach(path -> {
+                    Map<String, Object> item = new LinkedHashMap<>();
+                    item.put("name", path.getFileName().toString());
+                    item.put("relative_path", root.relativize(path).toString());
+                    item.put("type", datasetType(path.getFileName().toString()));
+                    datasets.add(item);
+                });
+        }
+        return datasets;
+    }
+
+    private static boolean isDatasetFile(String name) {
+        String lower = name.toLowerCase();
+        return lower.endsWith(".zip") || lower.endsWith(".tif") || lower.endsWith(".tiff");
+    }
+
+    private static String datasetType(String name) {
+        String lower = name.toLowerCase();
+        if (lower.endsWith(".zip")) return "zip";
+        if (lower.endsWith(".tif") || lower.endsWith(".tiff")) return "raster";
+        return "file";
+    }
+
+    private Path dataRootPath() {
+        return Path.of(stringValue(state.defaults.get("data_root"))).toAbsolutePath().normalize();
+    }
+
+    private void downloadReport(HttpExchange exchange) throws IOException {
+        String format = queryParam(exchange, "format", "md").toLowerCase();
+        String content;
+        synchronized (stateLock) {
+            if (state.latestResult == null || Boolean.TRUE.equals(state.latestResult.get("is_error"))) {
+                throw new IllegalArgumentException("No downloadable report is available.");
+            }
+            content = exportContent(state.latestResult);
+        }
+
+        switch (format) {
+            case "md" -> sendDownload(
+                exchange,
+                "real-estate-beyond-rgb-report.md",
+                "text/markdown; charset=utf-8",
+                content.getBytes(StandardCharsets.UTF_8)
+            );
+            case "pdf" -> sendDownload(
+                exchange,
+                "real-estate-beyond-rgb-report.pdf",
+                "application/pdf",
+                pdfBytes(content)
+            );
+            case "docx" -> sendDownload(
+                exchange,
+                "real-estate-beyond-rgb-report.docx",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                docxBytes(content)
+            );
+            default -> throw new IllegalArgumentException("Unsupported download format: " + format);
+        }
+    }
+
+    private String exportContent(Map<String, Object> latestResult) {
+        StringBuilder content = new StringBuilder();
+        content.append("# Real Estate Beyond RGB Report\n\n");
+        content.append(stringValue(latestResult.get("content")).strip()).append("\n");
+
+        List<Object> trace = listValue(latestResult.get("trace"));
+        if (!trace.isEmpty()) {
+            content.append("\n\n## Data Used\n");
+            int index = 1;
+            for (Object item : trace) {
+                Map<String, Object> step = objectValue(item);
+                content.append("\n### ")
+                    .append(index++)
+                    .append(". ")
+                    .append(stringValue(step.get("tool")))
+                    .append("\n\n");
+                content.append("Arguments:\n\n```json\n")
+                    .append(Json.stringify(step.getOrDefault("arguments", Map.of())))
+                    .append("\n```\n\n");
+                if (step.get("result_preview") != null) {
+                    content.append("Result data:\n\n```text\n")
+                        .append(stringValue(step.get("result_preview")))
+                        .append("\n```\n");
+                }
+            }
+        }
+
+        return content.toString();
     }
 
     private Map<String, Object> statePayload() {
@@ -358,6 +489,165 @@ public final class AppServer {
             return;
         }
         sendFile(exchange, target);
+    }
+
+    private static void sendDownload(HttpExchange exchange, String filename, String contentType, byte[] bytes) throws IOException {
+        Headers headers = exchange.getResponseHeaders();
+        headers.set("Content-Type", contentType);
+        headers.set("Content-Disposition", "attachment; filename=\"" + filename + "\"");
+        exchange.sendResponseHeaders(200, bytes.length);
+        try (OutputStream output = exchange.getResponseBody()) {
+            output.write(bytes);
+        }
+    }
+
+    private static String queryParam(HttpExchange exchange, String name, String fallback) {
+        String query = exchange.getRequestURI().getRawQuery();
+        if (query == null || query.isBlank()) {
+            return fallback;
+        }
+        for (String pair : query.split("&")) {
+            String[] parts = pair.split("=", 2);
+            String key = URLDecoder.decode(parts[0], StandardCharsets.UTF_8);
+            if (!name.equals(key)) {
+                continue;
+            }
+            return parts.length > 1 ? URLDecoder.decode(parts[1], StandardCharsets.UTF_8) : "";
+        }
+        return fallback;
+    }
+
+    private static byte[] pdfBytes(String content) {
+        String text = content
+            .replace("\r", "")
+            .replace("\t", "    ");
+        List<String> lines = wrapLines(text, 86);
+        List<String> pageStreams = new ArrayList<>();
+        for (int start = 0; start < lines.size(); start += 54) {
+            StringBuilder page = new StringBuilder();
+            page.append("BT\n/F1 10 Tf\n14 TL\n50 780 Td\n");
+            for (String line : lines.subList(start, Math.min(start + 54, lines.size()))) {
+                page.append(pdfText(line)).append(" Tj\nT*\n");
+            }
+            page.append("ET\n");
+            pageStreams.add(page.toString());
+        }
+        if (pageStreams.isEmpty()) {
+            pageStreams.add("BT\n/F1 10 Tf\n14 TL\n50 780 Td\n(Empty report) Tj\nET\n");
+        }
+
+        String header = "%PDF-1.4\n";
+        List<String> objects = new ArrayList<>();
+        objects.add("1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+
+        int firstPageObject = 4;
+        StringBuilder kids = new StringBuilder();
+        for (int i = 0; i < pageStreams.size(); i++) {
+            kids.append(firstPageObject + (i * 2)).append(" 0 R ");
+        }
+        objects.add("2 0 obj\n<< /Type /Pages /Kids [" + kids + "] /Count " + pageStreams.size() + " >>\nendobj\n");
+        objects.add("3 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n");
+        for (int i = 0; i < pageStreams.size(); i++) {
+            int pageObject = firstPageObject + (i * 2);
+            int contentObject = pageObject + 1;
+            String streamText = pageStreams.get(i);
+            int length = streamText.getBytes(StandardCharsets.UTF_8).length;
+            objects.add(pageObject + " 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents " + contentObject + " 0 R >>\nendobj\n");
+            objects.add(contentObject + " 0 obj\n<< /Length " + length + " >>\nstream\n" + streamText + "endstream\nendobj\n");
+        }
+
+        StringBuilder pdf = new StringBuilder(header);
+        List<Integer> offsets = new ArrayList<>();
+        for (String object : objects) {
+            offsets.add(pdf.toString().getBytes(StandardCharsets.UTF_8).length);
+            pdf.append(object);
+        }
+        int xrefOffset = pdf.toString().getBytes(StandardCharsets.UTF_8).length;
+        pdf.append("xref\n0 ").append(objects.size() + 1).append("\n");
+        pdf.append("0000000000 65535 f \n");
+        for (int offset : offsets) {
+            pdf.append(String.format("%010d 00000 n \n", offset));
+        }
+        pdf.append("trailer\n<< /Size ").append(objects.size() + 1).append(" /Root 1 0 R >>\n");
+        pdf.append("startxref\n").append(xrefOffset).append("\n%%EOF\n");
+        return pdf.toString().getBytes(StandardCharsets.UTF_8);
+    }
+
+    private static String pdfText(String text) {
+        return "("
+            + text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+            + ")";
+    }
+
+    private static byte[] docxBytes(String content) throws IOException {
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        try (ZipOutputStream zip = new ZipOutputStream(output, StandardCharsets.UTF_8)) {
+            zipEntry(zip, "[Content_Types].xml", """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+                  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+                  <Default Extension="xml" ContentType="application/xml"/>
+                  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+                </Types>
+                """);
+            zipEntry(zip, "_rels/.rels", """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+                  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+                </Relationships>
+                """);
+            zipEntry(zip, "word/document.xml", wordDocument(content));
+        }
+        return output.toByteArray();
+    }
+
+    private static String wordDocument(String content) {
+        StringBuilder body = new StringBuilder();
+        for (String line : content.replace("\r", "").split("\n")) {
+            body.append("<w:p><w:r><w:t xml:space=\"preserve\">")
+                .append(xmlEscape(line))
+                .append("</w:t></w:r></w:p>");
+        }
+        return """
+            <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+            <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+              <w:body>
+            """
+            + body
+            + """
+                <w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr>
+              </w:body>
+            </w:document>
+            """;
+    }
+
+    private static void zipEntry(ZipOutputStream zip, String name, String content) throws IOException {
+        zip.putNextEntry(new ZipEntry(name));
+        zip.write(content.stripIndent().getBytes(StandardCharsets.UTF_8));
+        zip.closeEntry();
+    }
+
+    private static List<String> wrapLines(String text, int width) {
+        List<String> lines = new ArrayList<>();
+        for (String paragraph : text.split("\n")) {
+            String remaining = paragraph;
+            while (remaining.length() > width) {
+                int split = remaining.lastIndexOf(' ', width);
+                if (split < 24) split = width;
+                lines.add(remaining.substring(0, split).strip());
+                remaining = remaining.substring(split).strip();
+            }
+            lines.add(remaining);
+        }
+        return lines;
+    }
+
+    private static String xmlEscape(String text) {
+        return text
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace("\"", "&quot;");
     }
 
     private static void sendFile(HttpExchange exchange, Path path) throws IOException {

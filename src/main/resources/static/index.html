@@ -13,7 +13,6 @@
       <span class="brand-mark">RGB</span>
       <span>
         <strong>Real Estate Beyond RGB</strong>
-        <small>Land investment analysis workspace</small>
       </span>
     </a>
     <nav class="topnav" aria-label="Primary navigation">
@@ -23,64 +22,42 @@
   </header>
 
   <main class="workspace">
-    <section class="brief-band">
-      <div>
-        <p class="eyebrow">Challenge Brief</p>
-        <h1>Compare hyperspectral parcel datasets and identify the strongest investment case.</h1>
-      </div>
-      <p>
-        Each candidate land area is approximately 250,000 m2 with a similar footprint and an assumed price near 1 million euros.
-        The report should use spectral, environmental, and topographic evidence before making a transparent recommendation.
-      </p>
-    </section>
-
-    <section class="prompt-panel" aria-labelledby="prompt-title">
-      <div>
-        <h2 id="prompt-title">Investment Request</h2>
-        <p>Ask the agent to inspect the mounted parcel data and produce a decision-oriented report.</p>
-      </div>
+    <section class="prompt-panel compact" aria-label="Analysis request">
       <form id="prompt-form" class="prompt-form">
+        <label class="dataset-field" for="dataset-select">
+          Dataset
+          <select id="dataset-select" name="dataset" multiple size="4"></select>
+        </label>
         <label class="sr-only" for="prompt-input">Prompt</label>
-        <input id="prompt-input" name="prompt" type="text" autocomplete="off" placeholder="Compare the four parcel data files and recommend the best investment opportunity...">
+        <input id="prompt-input" name="prompt" type="text" autocomplete="off" placeholder="Compare selected data and recommend the best parcel...">
         <button class="button primary" type="submit">Send</button>
       </form>
     </section>
 
-    <section class="report-layout">
-      <aside class="status-rail" aria-label="Runtime status">
-        <div class="stat-block">
-          <span>Provider</span>
-          <strong data-runtime="provider">-</strong>
-        </div>
-        <div class="stat-block">
-          <span>Model</span>
-          <strong data-runtime="model">-</strong>
-        </div>
-        <div class="stat-block">
-          <span>Max steps</span>
-          <strong data-runtime="max_steps">-</strong>
-        </div>
-      </aside>
-
+    <section class="report-layout single">
       <section class="report-panel" aria-labelledby="report-title">
         <div class="section-head">
           <div>
-            <p class="eyebrow">Condensed Report</p>
             <h2 id="report-title">Investment Analysis</h2>
           </div>
-          <div id="run-status" class="run-status" aria-live="polite">Idle</div>
+          <div class="report-actions">
+            <button class="button download-button" type="button" data-download-format="md" disabled>MD</button>
+            <button class="button download-button" type="button" data-download-format="pdf" disabled>PDF</button>
+            <button class="button download-button" type="button" data-download-format="docx" disabled>DOCX</button>
+            <div id="run-status" class="run-status" aria-live="polite">Idle</div>
+          </div>
         </div>
         <div id="report-output" class="report-output empty">
-          No report yet. Ask the agent to compare the four parcel datasets.
+          No report yet.
         </div>
+        <div id="figures-output" class="figures-grid hidden"></div>
       </section>
     </section>
 
     <section id="trace-section" class="trace-section hidden" aria-labelledby="trace-title">
       <div class="section-head">
         <div>
-          <p class="eyebrow">Analysis Activity</p>
-          <h2 id="trace-title">Tool Calls</h2>
+          <h2 id="trace-title">Data Used</h2>
         </div>
       </div>
       <div id="trace-output" class="trace-list"></div>

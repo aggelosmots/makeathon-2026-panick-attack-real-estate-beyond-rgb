@@ -167,30 +167,6 @@ def write_text_file(path: str, content: str, overwrite: bool = False) -> str:
 
 
 @mcp.tool()
-def summarize_csv(path: str, max_rows: int = 5) -> dict[str, Any]:
-    """Summarize a CSV file in the shared data directory.
-
-    Args:
-        path: Relative CSV path under DATA_ROOT.
-        max_rows: Number of preview rows to return.
-    """
-    file_path = _safe_path(path)
-    if not file_path.exists():
-        return {"error": f"File does not exist: {path}"}
-    if not file_path.is_file():
-        return {"error": f"Not a file: {path}"}
-
-    df = pd.read_csv(file_path)
-    return {
-        "path": path,
-        "shape": {"rows": int(df.shape[0]), "columns": int(df.shape[1])},
-        "columns": [{"name": str(c), "dtype": str(df[c].dtype)} for c in df.columns],
-        "preview": df.head(max_rows).to_dict(orient="records"),
-        "numeric_summary": df.describe(include="number").fillna("").to_dict(),
-    }
-
-
-@mcp.tool()
 def search_text_files(query: str, subdir: str = ".", glob_pattern: str = "**/*", max_matches: int = 20) -> list[dict[str, Any]]:
     """Search for text inside files in the shared data directory.
 

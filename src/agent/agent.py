@@ -19,7 +19,7 @@ HF_TOKEN        = env_str("HF_TOKEN", "")
 HF_MODEL        = env_str("HF_MODEL", "google/gemma-3-27b-it")
 HF_MAX_COMPLETION_TOKENS = env_int("HF_MAX_COMPLETION_TOKENS", 4096)
 MCP_SERVER_URL  = env_str("MCP_SERVER_URL", "http://localhost:8000/mcp")
-AGENT_MAX_STEPS = env_int("AGENT_MAX_STEPS", 6)
+AGENT_MAX_STEPS = env_int("AGENT_MAX_STEPS", 20)
 
 ###
 ###         WE NEED TO CREATE THE AGENT PROMPT
@@ -59,6 +59,9 @@ Deliver a continuous, jargon-free business report that gives the user the result
 
 5. UNVERIFIED DATA / RISKS
 [Explicitly list any data points that could not be verified, or explicitly state "All core metrics successfully verified."]
+
+6. FIGURES
+[Include compact chart-ready values for the user interface. Use one line per parcel with: parcel name, mean NDVI, NDVI standard deviation, healthy coverage percentage, and final score. Do not include fabricated values.]
 
 Before outputting your response, you must internally evaluate: "Is every statement in my response verifiable, supported by real tool data, free of fabrication, and transparently cited? Have I shown how I calculated my numbers?" If not, revise until it is.
 """
@@ -259,6 +262,73 @@ def _sanitize_answer(answer: str, trace: list[dict[str, Any]]) -> str:
     return cleaned
 
 
+def _is_length_limited(choice: dict[str, Any]) -> bool:
+    reason = str(choice.get("finish_reason") or "").lower()
+    return reason in {"length", "max_tokens", "max_completion_tokens"}
+
+
+def _looks_incomplete(answer: str) -> bool:
+    stripped = answer.strip().lower()
+    if not stripped:
+        return True
+    incomplete_endings = (
+        "continue",
+        "shall i continue",
+        "should i continue",
+        "would you like me to continue",
+        "let me know if you want me to continue",
+    )
+    if any(ending in stripped[-160:] for ending in incomplete_endings):
+        return True
+    return stripped.endswith((",", ";", ":", "and", "or", "with", "based on"))
+
+
+async def _post_chat_completion(
+    client: httpx.AsyncClient,
+    headers: dict[str, str],
+    model: str,
+    messages: list[dict[str, Any]],
+    telemetry: dict[str, Any],
+    *,
+    tools: list[dict[str, Any]] | None = None,
+    tool_choice: str | None = None,
+    error_context: str = "chat request",
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    payload: dict[str, Any] = {
+        "model": model,
+        "messages": _clean_openai_messages(messages),
+        "stream": False,
+        "max_completion_tokens": HF_MAX_COMPLETION_TOKENS,
+    }
+    if tools is not None:
+        payload["tools"] = tools
+    if tool_choice is not None:
+        payload["tool_choice"] = tool_choice
+
+    response = await client.post(
+        f"{HF_API_BASE}/chat/completions",
+        headers=headers,
+        json=payload,
+    )
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        detail = _api_error_message(response)
+        call_telemetry = _response_telemetry("huggingface", model, response, error_message=detail)
+        telemetry["calls"].append(call_telemetry)
+        raise ModelAPIError(
+            f"Hugging Face {error_context} failed for model `{model}`: {detail}",
+            telemetry,
+        ) from exc
+
+    response_payload = response.json()
+    telemetry["calls"].append(_response_telemetry("huggingface", model, response, response_payload))
+    choices = response_payload.get("choices") or []
+    choice = (choices[0] if choices else {}) or {}
+    assistant_message = _clean_openai_message((choice.get("message") if choice else {}) or {})
+    return choice, assistant_message
+
+
 def _clean_openai_tool_call(call: Any) -> dict[str, Any]:
     call_dict = _obj_to_dict(call)
     if not isinstance(call_dict, dict):
@@ -405,39 +475,38 @@ async def _run_huggingface_agent(
     }
 
     async with httpx.AsyncClient(timeout=None) as client:
+        accumulated_answer = ""
+        continuations = 0
         for _ in range(max_steps):
-            response = await client.post(
-                f"{HF_API_BASE}/chat/completions",
-                headers=headers,
-                json={
-                    "model": model,
-                    "messages": _clean_openai_messages(messages),
-                    "tools": tools,
-                    "tool_choice": "auto",
-                    "stream": False,
-                    "max_completion_tokens": HF_MAX_COMPLETION_TOKENS,
-                },
+            choice, assistant_message = await _post_chat_completion(
+                client,
+                headers,
+                model,
+                messages,
+                telemetry,
+                tools=tools,
+                tool_choice="auto",
+                error_context="chat request",
             )
-            try:
-                response.raise_for_status()
-            except httpx.HTTPStatusError as exc:
-                detail = _api_error_message(response)
-                call_telemetry = _response_telemetry("huggingface", model, response, error_message=detail)
-                telemetry["calls"].append(call_telemetry)
-                raise ModelAPIError(
-                    f"Hugging Face chat request failed for model `{model}`: {detail}",
-                    telemetry,
-                ) from exc
-
-            payload = response.json()
-            telemetry["calls"].append(_response_telemetry("huggingface", model, response, payload))
-            choices = payload.get("choices") or []
-            assistant_message = _clean_openai_message((choices[0].get("message") if choices else {}) or {})
             messages.append(assistant_message)
 
             tool_calls = assistant_message.get("tool_calls") or []
             if not tool_calls:
-                answer = _sanitize_answer(assistant_message.get("content", ""), trace)
+                content = assistant_message.get("content", "")
+                accumulated_answer = f"{accumulated_answer}\n{content}".strip() if accumulated_answer else content
+                if (_is_length_limited(choice) or _looks_incomplete(accumulated_answer)) and continuations < 8:
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "Continue exactly where the report stopped. Do not ask whether to continue, "
+                            "do not restart, do not repeat completed sections, and finish the remaining "
+                            "sections completely."
+                        ),
+                    })
+                    continuations += 1
+                    continue
+
+                answer = _sanitize_answer(accumulated_answer, trace)
                 return {
                     "answer": answer,
                     "trace": trace,
@@ -459,13 +528,54 @@ async def _run_huggingface_agent(
                 except Exception as exc:
                     tool_result = f"Tool error: {type(exc).__name__}: {exc}"
 
-                trace[-1]["result_preview"] = tool_result[:1000]
+                trace[-1]["result_preview"] = tool_result[:6000]
                 messages.append({
                     "role": "tool",
                     "tool_call_id": call.get("id"),
                     "name": tool_name,
                     "content": tool_result,
                 })
+
+        messages.append({
+            "role": "user",
+            "content": (
+                "Stop calling tools now and produce the final report from the verified tool "
+                "results already collected. If any required metric is missing, state that it "
+                "could not be verified instead of asking to continue. Do not ask whether to continue."
+            ),
+        })
+        final_answer = ""
+        final_messages = messages[:]
+        final_assistant_message: dict[str, Any] = {}
+        for _ in range(9):
+            choice, final_assistant_message = await _post_chat_completion(
+                client,
+                headers,
+                model,
+                final_messages,
+                telemetry,
+                error_context="final synthesis request",
+            )
+            final_messages.append(final_assistant_message)
+            content = final_assistant_message.get("content", "")
+            final_answer = f"{final_answer}\n{content}".strip() if final_answer else content
+            if not _is_length_limited(choice) and not _looks_incomplete(final_answer):
+                break
+            final_messages.append({
+                "role": "user",
+                "content": (
+                    "Continue exactly where the report stopped. Do not ask whether to continue. "
+                    "Do not repeat earlier text. Finish the report now."
+                ),
+            })
+
+        answer = _sanitize_answer(final_answer, trace)
+        return {
+            "answer": answer,
+            "trace": trace,
+            "messages": final_messages,
+            "telemetry": telemetry,
+        }
 
     return {
         "answer": "I reached the configured tool-call limit before producing a final answer.",

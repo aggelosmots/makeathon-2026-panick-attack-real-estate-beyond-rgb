@@ -29,6 +29,16 @@ function toast(message) {
   node.dataset.timer = window.setTimeout(() => node.classList.remove("visible"), 3200);
 }
 
+function filenameForFormat(format) {
+  const normalized = String(format || "md").toLowerCase();
+  return `real-estate-beyond-rgb-report.${normalized}`;
+}
+
+function filenameFromDisposition(disposition, fallback) {
+  const match = String(disposition || "").match(/filename="?([^"]+)"?/i);
+  return match ? match[1] : fallback;
+}
+
 async function requestJson(url, options = {}) {
   const response = await fetch(url, {
     headers: { "Content-Type": "application/json", ...(options.headers || {}) },
@@ -117,7 +127,9 @@ function renderReport(result) {
 
   if (!result) {
     output.classList.add("empty");
-    output.textContent = "No report yet. Ask the agent to compare the four parcel datasets.";
+    output.textContent = "No report yet.";
+    renderFigures(null);
+    setDownloadsEnabled(false);
     renderTrace([]);
     return;
   }
@@ -125,7 +137,104 @@ function renderReport(result) {
   output.classList.toggle("empty", false);
   output.classList.toggle("error", Boolean(result.is_error));
   output.innerHTML = markdownToHtml(result.content);
+  renderFigures(result);
+  setDownloadsEnabled(!result.is_error);
   renderTrace(result.trace || []);
+}
+
+function setDownloadsEnabled(enabled) {
+  $$(".download-button").forEach((button) => {
+    button.disabled = !enabled;
+  });
+}
+
+function renderFigures(result) {
+  const output = $("#figures-output");
+  if (!output) return;
+
+  const metrics = extractMetrics(result?.content || "");
+  if (!metrics.length) {
+    output.classList.add("hidden");
+    output.innerHTML = "";
+    return;
+  }
+
+  const rows = [
+    ["Mean NDVI", "ndvi"],
+    ["Healthy Coverage", "coverage"],
+    ["Uniformity", "uniformity"],
+  ];
+  output.classList.remove("hidden");
+  output.innerHTML = rows.map(([title, key]) => figureCard(title, metrics, key)).join("");
+}
+
+function figureCard(title, metrics, key) {
+  const values = metrics.filter((item) => Number.isFinite(item[key]));
+  if (!values.length) return "";
+  const max = Math.max(...values.map((item) => Math.abs(item[key])), 1);
+  return `
+    <article class="figure-card">
+      <h3>${escapeHtml(title)}</h3>
+      <div class="bar-list">
+        ${values.map((item) => {
+          const width = Math.max(4, Math.min(100, Math.abs(item[key]) / max * 100));
+          return `
+            <div class="bar-row">
+              <span>${escapeHtml(item.name)}</span>
+              <div class="bar-track"><div class="bar-fill" style="width: ${width}%"></div></div>
+              <strong>${escapeHtml(formatMetric(item[key], key))}</strong>
+            </div>
+          `;
+        }).join("")}
+      </div>
+    </article>
+  `;
+}
+
+function formatMetric(value, key) {
+  if (!Number.isFinite(value)) return "-";
+  if (key === "coverage") return `${value.toFixed(1)}%`;
+  return value.toFixed(3);
+}
+
+function extractMetrics(content) {
+  const names = ["Arkadia_2", "Arkadia 2", "Arkadia", "Magnisia", "Veroia"];
+  const byName = new Map();
+  String(content).split(/\r?\n/).forEach((line) => {
+    const normalized = line.replace(/\|/g, " ");
+    const matchedName = names.find((name) => new RegExp(`\\b${name.replace(" ", "[ _-]?")}\\b`, "i").test(normalized));
+    if (!matchedName) return;
+
+    const key = matchedName.toLowerCase().replace(/\s+/g, "_");
+    const item = byName.get(key) || { name: matchedName.replace("_", " ") };
+    const lower = normalized.toLowerCase();
+    const numbers = normalized.match(/-?\d+(?:\.\d+)?%?/g) || [];
+    const numericValues = numbers.map((value) => Number(value.replace("%", ""))).filter(Number.isFinite);
+
+    if (lower.includes("ndvi") && !lower.includes("standard") && item.ndvi === undefined) {
+      item.ndvi = numericValues.find((value) => value >= -1 && value <= 1);
+    }
+    if ((lower.includes("coverage") || lower.includes("healthy")) && item.coverage === undefined) {
+      item.coverage = numericValues.find((value) => value >= 0 && value <= 100);
+    }
+    if ((lower.includes("standard deviation") || lower.includes("uniformity") || lower.includes("std")) && item.uniformity === undefined) {
+      const std = numericValues.find((value) => value >= 0 && value <= 1);
+      if (std !== undefined) item.uniformity = Math.max(0, 1 - std);
+    }
+    if (item.ndvi === undefined && item.coverage === undefined && item.uniformity === undefined && numericValues.length >= 3) {
+      const ndvi = numericValues.find((value) => value >= -1 && value <= 1);
+      const std = numericValues.find((value, index) => index > 0 && value >= 0 && value <= 1);
+      const coverage = numericValues.find((value) => value > 1 && value <= 100);
+      if (ndvi !== undefined) item.ndvi = ndvi;
+      if (std !== undefined) item.uniformity = Math.max(0, 1 - std);
+      if (coverage !== undefined) item.coverage = coverage;
+    }
+
+    if (item.ndvi !== undefined || item.coverage !== undefined || item.uniformity !== undefined) {
+      byName.set(key, item);
+    }
+  });
+  return Array.from(byName.values());
 }
 
 function renderTrace(trace) {
@@ -136,11 +245,10 @@ function renderTrace(trace) {
   section.classList.toggle("hidden", !trace.length);
   output.innerHTML = trace.map((step, index) => `
     <article class="trace-item">
-      <h3>Step ${index + 1}</h3>
-      <p><strong>Tool:</strong> <code>${escapeHtml(step.tool || "unknown")}</code></p>
+      <h3>${escapeHtml(step.tool || `Step ${index + 1}`)}</h3>
       <p><strong>Arguments</strong></p>
       <pre class="code-block">${escapeHtml(JSON.stringify(step.arguments || {}, null, 2))}</pre>
-      ${step.result_preview ? `<p><strong>Preview</strong></p><pre class="code-block">${escapeHtml(step.result_preview)}</pre>` : ""}
+      ${step.result_preview ? `<p><strong>Data</strong></p><pre class="code-block">${escapeHtml(step.result_preview)}</pre>` : ""}
     </article>
   `).join("");
 }
@@ -268,8 +376,24 @@ async function loadState() {
   renderRuntime(state.payload.runtime);
   if (state.page === "user") {
     renderReport(state.payload.latest_result);
+    await loadDatasets();
   } else {
     renderDeveloper(state.payload);
+  }
+}
+
+async function loadDatasets() {
+  const select = $("#dataset-select");
+  if (!select) return;
+
+  try {
+    const payload = await requestJson("/api/datasets");
+    const datasets = payload.datasets || [];
+    select.innerHTML = datasets.map((item) => `
+      <option value="${escapeHtml(item.relative_path)}" selected>${escapeHtml(item.name)}</option>
+    `).join("");
+  } catch (error) {
+    select.innerHTML = `<option value="" disabled>${escapeHtml(error.message)}</option>`;
   }
 }
 
@@ -288,6 +412,9 @@ function setupUserPage() {
     }
 
     const button = form.querySelector("button");
+    const datasets = Array.from($("#dataset-select")?.selectedOptions || [])
+      .map((option) => option.value)
+      .filter(Boolean);
     button.disabled = true;
     status.textContent = "Running";
     status.classList.add("busy");
@@ -295,7 +422,7 @@ function setupUserPage() {
     try {
       state.payload = await requestJson("/api/agent", {
         method: "POST",
-        body: JSON.stringify({ prompt }),
+        body: JSON.stringify({ prompt, datasets }),
       });
       input.value = "";
       renderRuntime(state.payload.runtime);
@@ -308,6 +435,37 @@ function setupUserPage() {
       status.textContent = "Idle";
       status.classList.remove("busy");
     }
+  });
+
+  $$(".download-button").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const format = button.dataset.downloadFormat;
+      if (!format) return;
+      button.disabled = true;
+      try {
+        const response = await fetch(`/api/download?format=${encodeURIComponent(format)}`);
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({}));
+          throw new Error(payload.error || `Download failed with HTTP ${response.status}`);
+        }
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = filenameFromDisposition(
+          response.headers.get("Content-Disposition"),
+          filenameForFormat(format),
+        );
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(url);
+      } catch (error) {
+        toast(error.message);
+      } finally {
+        button.disabled = false;
+      }
+    });
   });
 }
 
