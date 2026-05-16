@@ -16,3 +16,5 @@ osmnx
 pysheds
 bmi_topography
 seaborn
+rioxarray
+shapely

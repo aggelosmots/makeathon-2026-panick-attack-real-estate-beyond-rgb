@@ -14,6 +14,8 @@ import pandas as pd
 import pyproj
 import rasterio
 from bmi_topography import Topography
+import rioxarray
+import shapely
 from mcp.server.fastmcp import FastMCP
 from pyproj import Transformer
 from pysheds.grid import Grid
@@ -428,6 +430,108 @@ def _Flood_risk(target_lat: float, target_lon: float) -> str:
     return report_text
 
 
+def _calculate_flood_risk(target_lat: float, target_lon: float) -> str:
+    bbox = _bbox_from_point(target_lat, target_lon)
+    
+    local_tif = r"C:\Users\malad\OneDrive\Device\Makeathon\github_repo\makeathon-2026-panick-attack-real-estate-beyond-rgb\data\output_hh.tif"
+    temp_clipped_tif = "temp_greece_dem.tif"
+    
+    print(f"Reading and clipping local DEM: {local_tif}...")
+    
+    # Open the local raster with rioxarray to perform the spatial clip
+    rds = rioxarray.open_rasterio(local_tif)
+    
+    # Create a bounding box geometry for the clip
+    geom = shapely.geometry.box(bbox["west"], bbox["south"], bbox["east"], bbox["north"])
+    
+    # Clip the raster to your bounding box area
+    # (crs="EPSG:4326" assumes your bbox coordinates match the TIF's coordinate system)
+    clipped_rds = rds.rio.clip([geom], crs="EPSG:4326")
+    
+    # Save the clipped region to match your downstream workflow filename
+    clipped_rds.rio.to_raster(temp_clipped_tif)
+
+    print("DEM Clipping Complete. Injecting into Hydrological Pipeline...")
+    grid = Grid.from_raster(temp_clipped_tif)
+
+    with rasterio.open(temp_clipped_tif) as src:
+        dem_data = src.read(1)
+        # Note: rasterio expects (lon, lat) for indexing
+        row_idx, col_idx = src.index(target_lon, target_lat)
+        target_altitude = dem_data[row_idx, col_idx]
+        
+        cellsize_x = abs(src.transform[0]) * 111000 * np.cos(np.radians(target_lat))
+        cellsize_y = abs(src.transform[4]) * 111000
+
+        try:
+            z = dem_data[row_idx-1:row_idx+2, col_idx-1:col_idx+2]
+            if z.shape == (3, 3):
+                dz_dx = ((z[0,2] + 2*z[1,2] + z[2,2]) - (z[0,0] + 2*z[1,0] + z[2,0])) / (8 * cellsize_x)
+                dz_dy = ((z[2,0] + 2*z[2,1] + z[2,2]) - (z[0,0] + 2*z[0,1] + z[0,2])) / (8 * cellsize_y)
+                
+                slope_rise_run = np.sqrt(dz_dx**2 + dz_dy**2)
+                slope_degrees = np.degrees(np.arctan(slope_rise_run))
+                slope_percent = slope_rise_run * 100
+            else:
+                slope_degrees, slope_percent = 0.0, 0.0
+        except IndexError:
+            slope_degrees, slope_percent = 0.0, 0.0
+
+    print("Conditioning surface topography...")
+    dem_raster = grid.read_raster(temp_clipped_tif)
+    pit_filled = grid.fill_pits(dem_raster)
+    flooded = grid.fill_depressions(pit_filled)
+    conditioned_dem = grid.resolve_flats(flooded)
+
+    print("Computing flow directions (D8 Routing)...")
+    fdir = grid.flowdir(conditioned_dem)
+
+    print("Accumulating grid weights...")
+    acc = grid.accumulation(fdir)
+
+    target_acc = acc[row_idx, col_idx]
+    log_target_acc = np.log10(target_acc + 1)
+
+    print("Analysis successfully calculated!")
+
+    if log_target_acc < 1.5:
+        risk_status = "SAFE"
+        risk_desc = "Low accumulation area. Water sheds away naturally. Safe from water logging."
+    elif 1.5 <= log_target_acc < 3.0:
+        risk_status = "MINOR RISK"
+        risk_desc = "Minor collection channel or secondary swale. Watch for short-term pooling during storms."
+    else:
+        risk_status = "HIGH RISK"
+        risk_desc = "Critical accumulation line or terrain sink. Severe risk of pooling, soil anoxia, and flash flow."
+
+    if slope_degrees > 5.0:
+        slope_desc = "Steep terrain. High risk of soil erosion, nutrient washing, and rapid runoff velocity."
+    elif 2.0 <= slope_degrees <= 5.0:
+        slope_desc = "Moderate slope. Good drainage balance; minimal erosion concern under normal conditions."
+    else:
+        slope_desc = "Flat plain topography. Water moves slowly, maximizing infiltration but increasing pooling vulnerability."
+
+    report_text = f"""
+    [LOCATION INFORMATION]            
+    Target Coordinates : Lat {target_lat:.5f}, Lon {target_lon:.5f}
+    Local Elevation    : {target_altitude:.2f} meters above sea level
+    Surface Steepness  : {slope_degrees:.2f}[degrees] ({slope_percent:.1f}% grade)
+    Terrain Profile    : {slope_desc}
+    [FLOOD RISK ASSESSMENT REPORT]            
+    RAW FLOW ACCUM.    : {int(target_acc)} upstream contributing cells
+    OVERALL RISK LEVEL : {risk_status}
+    Risk Assessment    : {risk_desc}
+    """
+    print(report_text)
+    
+    # Optional clean up of temporary clipped file
+    if os.path.exists(temp_clipped_tif):
+        try:
+            os.remove(temp_clipped_tif)
+        except Exception:
+            pass # Keep going if file handles are still locked by pysheds/rasterio
+            
+    return report_text
 def _calculate_road_proximity(target_lat: float, target_lon: float) -> str:
     print("Querying OpenStreetMap directly from coordinate center point...")
     try:
@@ -554,11 +658,51 @@ def _process_enmap_soil_data(input_file: str) -> tuple[str, pd.DataFrame]:
     k_mean = summary_stats.loc['Potassium_K_mg_kg', 'mean']
     mg_mean = summary_stats.loc['Magnesium_Mg_mg_kg', 'mean']
 
-    # Status classifications adjusted to typical agronomy baselines
-    n_status = "DEFICIENT" if n_mean < 1500.0 else "SUFFICIENT"  # 0.15% translates directly to 1500 mg/kg
-    p_status = "DEFICIENT" if p_mean < 15.0 else "SUFFICIENT"
-    k_status = "DEFICIENT" if k_mean < 100.0 else "SUFFICIENT"
-    mg_status = "DEFICIENT" if mg_mean < 100.0 else "SUFFICIENT"
+    def classify_level(value, low, moderate, high):
+        if value < low:
+            return "DEFICIENT"
+        elif value < moderate:
+            return "LOW"
+        elif value < high:
+            return "ADEQUATE"
+        else:
+            return "HIGH"
+
+
+    # --- Mediterranean-oriented thresholds ---
+
+    # Total Nitrogen (mg/kg)
+    n_status = classify_level(
+        n_mean,
+        low=1000.0,
+        moderate=2000.0,
+        high=3500.0
+    )
+
+    # Available Phosphorus (mg/kg)
+    # Appropriate for Mediterranean calcareous soils using Olsen-P interpretation
+    p_status = classify_level(
+        p_mean,
+        low=10.0,
+        moderate=20.0,
+        high=35.0
+    )
+
+    # Exchangeable Potassium (mg/kg)
+    k_status = classify_level(
+        k_mean,
+        low=80.0,
+        moderate=150.0,
+        high=250.0
+    )
+
+    # Exchangeable Magnesium (mg/kg)
+    mg_status = classify_level(
+        mg_mean,
+        low=50.0,
+        moderate=100.0,
+        high=250.0
+    )
 
     soil_report_text = f"""
     [CHEMICAL CHARACTERISTICS]
@@ -663,7 +807,7 @@ def CREATE_GEO_AND_RISK_REPORT(TIF_DATA_PATH: str) -> str:
 
     print(f"Extracted midpoint coordinates from GeoTIFF: Latitude {target_lat}, Longitude {target_lon}")
     report = ''
-    report += _Flood_risk(target_lat, target_lon)
+    report += _calculate_flood_risk(target_lat, target_lon)
     report += _calculate_road_proximity(target_lat, target_lon)
     report_soil, _ = _process_enmap_soil_data(TIF_DATA_PATH)    
     report += report_soil
