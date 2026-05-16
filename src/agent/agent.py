@@ -20,6 +20,10 @@ GROQ_API_BASE   = env_str("GROQ_API_BASE", "https://api.groq.com/openai/v1").rst
 GROQ_API_KEY    = env_str("GROQ_API_KEY", "")
 GROQ_MODEL      = env_str("GROQ_MODEL", "llama-3.1-8b-instant")
 GROQ_MAX_COMPLETION_TOKENS = env_int("GROQ_MAX_COMPLETION_TOKENS", 512)
+HF_API_BASE     = env_str("HF_API_BASE", "https://router.huggingface.co/v1").rstrip("/")
+HF_TOKEN        = env_str("HF_TOKEN", "")
+HF_MODEL        = env_str("HF_MODEL", "google/gemma-4-E4B-it:fastest")
+HF_MAX_COMPLETION_TOKENS = env_int("HF_MAX_COMPLETION_TOKENS", 512)
 MCP_SERVER_URL  = env_str("MCP_SERVER_URL", "http://localhost:8000/mcp")
 AGENT_MAX_STEPS = env_int("AGENT_MAX_STEPS", 6)
 
@@ -61,6 +65,8 @@ def default_model_for_provider(provider: str | None = None) -> str:
     provider = (provider or MODEL_PROVIDER).strip().lower()
     if provider == "groq":
         return GROQ_MODEL
+    if provider == "huggingface":
+        return HF_MODEL
     if provider == "ollama":
         return OLLAMA_MODEL
     return GROQ_MODEL
@@ -197,6 +203,64 @@ def _parse_tool_arguments(arguments: Any) -> dict[str, Any]:
     return {}
 
 
+def _clean_openai_tool_call(call: Any) -> dict[str, Any]:
+    call_dict = _obj_to_dict(call)
+    if not isinstance(call_dict, dict):
+        return {}
+
+    fn = _obj_to_dict(call_dict.get("function") or {})
+    if not isinstance(fn, dict):
+        fn = {}
+
+    cleaned = {
+        "type": call_dict.get("type") or "function",
+        "function": {
+            "name": str(fn.get("name") or ""),
+            "arguments": fn.get("arguments") if isinstance(fn.get("arguments"), str) else json.dumps(fn.get("arguments") or {}),
+        },
+    }
+    if call_dict.get("id"):
+        cleaned["id"] = str(call_dict["id"])
+    return cleaned
+
+
+def _clean_openai_message(message: Any) -> dict[str, Any]:
+    message_dict = _obj_to_dict(message)
+    if not isinstance(message_dict, dict):
+        return {"role": "user", "content": str(message)}
+
+    role = str(message_dict.get("role") or "user")
+    content = message_dict.get("content")
+    cleaned: dict[str, Any] = {"role": role}
+
+    if role in {"system", "developer", "user"}:
+        cleaned["content"] = "" if content is None else str(content)
+    elif role == "assistant":
+        cleaned["content"] = "" if content is None else str(content)
+        tool_calls = [
+            cleaned_call
+            for call in message_dict.get("tool_calls") or []
+            if (cleaned_call := _clean_openai_tool_call(call)).get("function", {}).get("name")
+        ]
+        if tool_calls:
+            cleaned["tool_calls"] = tool_calls
+    elif role == "tool":
+        cleaned["content"] = "" if content is None else str(content)
+        if message_dict.get("tool_call_id"):
+            cleaned["tool_call_id"] = str(message_dict["tool_call_id"])
+    else:
+        cleaned["content"] = "" if content is None else str(content)
+
+    if isinstance(message_dict.get("name"), str) and message_dict["name"]:
+        cleaned["name"] = message_dict["name"]
+
+    return cleaned
+
+
+def _clean_openai_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [_clean_openai_message(message) for message in messages]
+
+
 async def list_ollama_models() -> list[str]:
     async with httpx.AsyncClient(timeout=10) as client:
         response = await client.get(f"{OLLAMA_HOST}/api/tags")
@@ -241,10 +305,28 @@ async def list_groq_models() -> list[str]:
     return sorted(str(model.get("id", "")) for model in models if model.get("id"))
 
 
+async def list_huggingface_models() -> list[str]:
+    if not HF_TOKEN:
+        raise RuntimeError("HF_TOKEN is not set.")
+
+    async with httpx.AsyncClient(timeout=20) as client:
+        response = await client.get(
+            f"{HF_API_BASE}/models",
+            headers={"Authorization": f"Bearer {HF_TOKEN}"},
+        )
+        response.raise_for_status()
+        payload = response.json()
+
+    models = payload.get("data") or []
+    return sorted(str(model.get("id", "")) for model in models if model.get("id"))
+
+
 async def list_provider_models(provider: str | None = None) -> list[str]:
     provider = (provider or MODEL_PROVIDER).strip().lower()
     if provider == "groq":
         return await list_groq_models()
+    if provider == "huggingface":
+        return await list_huggingface_models()
     if provider == "ollama":
         return await list_ollama_models()
     raise ValueError(f"Unsupported model provider: {provider}")
@@ -398,7 +480,7 @@ async def _run_groq_agent(
                 headers=headers,
                 json={
                     "model": model,
-                    "messages": messages,
+                    "messages": _clean_openai_messages(messages),
                     "tools": tools,
                     "tool_choice": "auto",
                     "stream": False,
@@ -419,7 +501,100 @@ async def _run_groq_agent(
             payload = response.json()
             telemetry["calls"].append(_response_telemetry("groq", model, response, payload))
             choices = payload.get("choices") or []
-            assistant_message = (choices[0].get("message") if choices else {}) or {}
+            assistant_message = _clean_openai_message((choices[0].get("message") if choices else {}) or {})
+            messages.append(assistant_message)
+
+            tool_calls = assistant_message.get("tool_calls") or []
+            if not tool_calls:
+                return {
+                    "answer": assistant_message.get("content", ""),
+                    "trace": trace,
+                    "messages": messages,
+                    "telemetry": telemetry,
+                }
+
+            for call in tool_calls:
+                fn = call.get("function", {})
+                tool_name = fn.get("name")
+                arguments = _parse_tool_arguments(fn.get("arguments"))
+
+                if not tool_name:
+                    continue
+
+                trace.append({"tool": tool_name, "arguments": arguments})
+                try:
+                    tool_result = await _call_mcp_tool(tool_name, arguments)
+                except Exception as exc:
+                    tool_result = f"Tool error: {type(exc).__name__}: {exc}"
+
+                trace[-1]["result_preview"] = tool_result[:1000]
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": call.get("id"),
+                    "name": tool_name,
+                    "content": tool_result,
+                })
+
+    return {
+        "answer": "I reached the configured tool-call limit before producing a final answer.",
+        "trace": trace,
+        "messages": messages,
+        "telemetry": telemetry,
+    }
+
+
+async def _run_huggingface_agent(
+    user_text: str,
+    history: list[dict[str, str]] | None,
+    model: str,
+    max_steps: int,
+) -> dict[str, Any]:
+    if not HF_TOKEN:
+        raise RuntimeError("HF_TOKEN is not set. Create a Hugging Face access token and add it to `.env`.")
+
+    messages = _base_messages(user_text, history)
+    tools = await _get_model_tools()
+    trace: list[dict[str, Any]] = []
+    telemetry: dict[str, Any] = {
+        "provider": "huggingface",
+        "model": model,
+        "max_completion_tokens": HF_MAX_COMPLETION_TOKENS,
+        "calls": [],
+    }
+    headers = {
+        "Authorization": f"Bearer {HF_TOKEN}",
+        "Content-Type": "application/json",
+    }
+
+    async with httpx.AsyncClient(timeout=None) as client:
+        for _ in range(max_steps):
+            response = await client.post(
+                f"{HF_API_BASE}/chat/completions",
+                headers=headers,
+                json={
+                    "model": model,
+                    "messages": _clean_openai_messages(messages),
+                    "tools": tools,
+                    "tool_choice": "auto",
+                    "stream": False,
+                    "max_completion_tokens": HF_MAX_COMPLETION_TOKENS,
+                },
+            )
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                detail = _api_error_message(response)
+                call_telemetry = _response_telemetry("huggingface", model, response, error_message=detail)
+                telemetry["calls"].append(call_telemetry)
+                raise ModelAPIError(
+                    f"Hugging Face chat request failed for model `{model}`: {detail}",
+                    telemetry,
+                ) from exc
+
+            payload = response.json()
+            telemetry["calls"].append(_response_telemetry("huggingface", model, response, payload))
+            choices = payload.get("choices") or []
+            assistant_message = _clean_openai_message((choices[0].get("message") if choices else {}) or {})
             messages.append(assistant_message)
 
             tool_calls = assistant_message.get("tool_calls") or []
@@ -475,6 +650,8 @@ async def ask_agent(
 
     if provider == "groq":
         return await _run_groq_agent(user_text, history, model, max_steps)
+    if provider == "huggingface":
+        return await _run_huggingface_agent(user_text, history, model, max_steps)
     if provider == "ollama":
         return await _run_ollama_agent(user_text, history, model, max_steps)
     raise ValueError(f"Unsupported model provider: {provider}")

@@ -8,6 +8,7 @@ import streamlit as st
 
 from src.agent.agent import (
     GROQ_API_BASE,
+    HF_API_BASE,
     MODEL_PROVIDER,
     OLLAMA_HOST,
     ask_agent,
@@ -18,7 +19,7 @@ from src.agent.agent import (
 from src.common_config import DATA_ROOT, env_int, env_str
 
 MAX_STEPS = env_int("AGENT_MAX_STEPS", 6)
-PROVIDERS = ["groq", "ollama"]
+PROVIDERS = ["groq", "huggingface", "ollama"]
 
 
 def run_async(coro):
@@ -306,6 +307,8 @@ with st.sidebar:
     st.caption(f"MCP server: `{env_str('MCP_SERVER_URL', 'http://localhost:8000/mcp')}`")
     if provider == "groq":
         st.caption(f"Groq API: `{GROQ_API_BASE}`")
+    elif provider == "huggingface":
+        st.caption(f"Hugging Face API: `{HF_API_BASE}`")
     else:
         st.caption(f"Ollama host: `{OLLAMA_HOST}`")
 

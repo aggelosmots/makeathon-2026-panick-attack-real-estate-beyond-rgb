@@ -1,7 +1,6 @@
 services:
   ollama:
     image: ollama/ollama:latest
-    container_name: template-ollama
     profiles:
       - ollama
     restart: unless-stopped
@@ -16,7 +15,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: template-mcp-tools
     restart: unless-stopped
     command: python -m src.mcp_server.server
     environment:
@@ -33,7 +31,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: template-agent-ui
     restart: unless-stopped
     command: streamlit run src/ui/app.py --server.address=0.0.0.0 --server.port=8501
     depends_on:
@@ -44,6 +41,10 @@ services:
       GROQ_API_KEY: ${GROQ_API_KEY:-}
       GROQ_MODEL: ${GROQ_MODEL:-llama-3.1-8b-instant}
       GROQ_MAX_COMPLETION_TOKENS: ${GROQ_MAX_COMPLETION_TOKENS:-512}
+      HF_API_BASE: ${HF_API_BASE:-https://router.huggingface.co/v1}
+      HF_TOKEN: ${HF_TOKEN:-}
+      HF_MODEL: ${HF_MODEL:-google/gemma-4-E4B-it:fastest}
+      HF_MAX_COMPLETION_TOKENS: ${HF_MAX_COMPLETION_TOKENS:-512}
       OLLAMA_HOST: http://ollama:11434
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3:8b}
       MCP_SERVER_URL: http://mcp-tools:8000/mcp

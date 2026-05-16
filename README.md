@@ -1,8 +1,8 @@
-# Groq/Ollama + MCP Data Agent
+# Hugging Face/Groq/Ollama + MCP Data Agent
 
 Dockerized starter system for a web-based agent that can inspect files in a host-mounted `./data` folder through MCP tools.
 
-The default model provider is **Groq** because it avoids local GPU/CPU requirements. **Ollama** is still available as an optional local provider.
+The system supports hosted inference through **Hugging Face Inference Providers** and **Groq**, plus optional local inference through **Ollama**. Hugging Face can be used to try Gemma 4 without running the model locally.
 
 ## Architecture
 
@@ -17,13 +17,13 @@ model agent
    |
    | OpenAI-compatible chat/tool API
    v
-Groq hosted inference
+Hugging Face or Groq hosted inference
 ```
 
 ## Requirements
 
 - Docker Engine with Docker Compose v2
-- A Groq API key from `https://console.groq.com/keys`
+- A Hugging Face token from `https://huggingface.co/settings/tokens`, or a Groq API key from `https://console.groq.com/keys`
 - Internet access from the `agent-ui` container
 
 ## Quick Start
@@ -34,9 +34,20 @@ Groq hosted inference
 cp .env.example .env
 ```
 
-2. Edit `.env` and set:
+2. Edit `.env` and set one hosted provider token.
+
+For Hugging Face Gemma 4:
 
 ```env
+MODEL_PROVIDER=huggingface
+HF_TOKEN=your_hugging_face_token_here
+HF_MODEL=google/gemma-4-E4B-it:fastest
+```
+
+For Groq:
+
+```env
+MODEL_PROVIDER=groq
 GROQ_API_KEY=your_groq_api_key_here
 ```
 
@@ -104,6 +115,11 @@ GROQ_API_KEY=your_groq_api_key_here
 GROQ_MODEL=llama-3.1-8b-instant
 GROQ_MAX_COMPLETION_TOKENS=512
 
+HF_API_BASE=https://router.huggingface.co/v1
+HF_TOKEN=your_hugging_face_token_here
+HF_MODEL=google/gemma-4-E4B-it:fastest
+HF_MAX_COMPLETION_TOKENS=512
+
 ALLOW_WRITE_TO_DATA=false
 AGENT_MAX_STEPS=6
 
@@ -113,11 +129,20 @@ MCP_PORT=8000
 
 `GROQ_MAX_COMPLETION_TOKENS=512` is intentionally modest to reduce free-tier rate-limit errors.
 
+To try Gemma 4 from Hugging Face, set:
+
+```env
+MODEL_PROVIDER=huggingface
+HF_MODEL=google/gemma-4-E4B-it:fastest
+```
+
+Hugging Face's OpenAI-compatible router uses `https://router.huggingface.co/v1`. The `:fastest` suffix lets the router choose the fastest available inference provider for that model.
+
 ## UI Usage
 
 The sidebar lets you:
 
-- Select `groq` or `ollama`.
+- Select `huggingface`, `groq`, or `ollama`.
 - Change the model name.
 - Change max tool-call steps.
 - Show provider models.
@@ -125,7 +150,7 @@ The sidebar lets you:
 
 The chat box sends prompts to the agent. When the model chooses a tool, the agent calls the MCP server, receives the result, and sends that result back to the model.
 
-The sidebar includes a **Telemetry** panel under the runtime buttons. It always shows the latest model call. Each assistant response also includes a **Model telemetry** expander. These views show provider/model, HTTP status, Groq token usage, rate-limit headers, and parsed rate-limit error fields such as `limit`, `used`, `requested`, and retry timing when Groq returns a rate-limit error.
+The sidebar includes a **Telemetry** panel under the runtime buttons. It always shows the latest model call. Each assistant response also includes a **Model telemetry** expander. These views show provider/model, HTTP status, token usage when returned by the provider, rate-limit headers, and parsed rate-limit error fields such as `limit`, `used`, `requested`, and retry timing.
 
 ## Data Folder
 
@@ -208,6 +233,18 @@ docker compose exec ollama ollama pull qwen3:8b
 On Linux with NVIDIA Container Toolkit, you can enable GPU for Ollama by uncommenting `gpus: all` in `docker-compose.yml`.
 
 ## Troubleshooting
+
+### `HF_TOKEN is not set`
+
+Add your Hugging Face token to `.env`, then restart:
+
+```bash
+docker compose up -d agent-ui
+```
+
+### Hugging Face model/provider error
+
+The Hugging Face router may reject a model if no provider is available for your account or if the selected provider does not support the requested chat/tool features. Try listing models from the UI, remove the `:fastest` suffix, or switch to another Gemma 4 model available to your account.
 
 ### `GROQ_API_KEY is not set`
 
