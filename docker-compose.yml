@@ -28,7 +28,7 @@ services:
       HF_API_BASE: ${HF_API_BASE:-https://router.huggingface.co/v1}
       HF_TOKEN: ${HF_TOKEN:-}
       HF_MODEL: ${HF_MODEL:-google/gemma-3-27b-it}
-      HF_MAX_COMPLETION_TOKENS: ${HF_MAX_COMPLETION_TOKENS:-512}
+      HF_MAX_COMPLETION_TOKENS: ${HF_MAX_COMPLETION_TOKENS:-4096}
       MCP_SERVER_URL: http://mcp-tools:8000/mcp
       DATA_ROOT: ${CONTAINER_DATA_DIR:-/workspace/data}
       AGENT_MAX_STEPS: ${AGENT_MAX_STEPS:-6}

@@ -103,7 +103,7 @@ MODEL_PROVIDER=huggingface
 HF_API_BASE=https://router.huggingface.co/v1
 HF_TOKEN=your_hugging_face_token_here
 HF_MODEL=google/gemma-3-27b-it
-HF_MAX_COMPLETION_TOKENS=512
+HF_MAX_COMPLETION_TOKENS=4096
 
 ALLOW_WRITE_TO_DATA=false
 AGENT_MAX_STEPS=6
