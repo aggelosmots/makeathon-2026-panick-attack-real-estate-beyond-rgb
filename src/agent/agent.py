@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from typing import Any
 
 import httpx
@@ -36,6 +37,14 @@ You can use MCP tools provided to you to access and perform actions on the syste
 
 class OllamaModelNotFoundError(RuntimeError):
     """Raised when the selected Ollama model is not available locally."""
+
+
+class ModelAPIError(RuntimeError):
+    """Raised when a model provider request fails with telemetry attached."""
+
+    def __init__(self, message: str, telemetry: dict[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.telemetry = telemetry or {}
 
 
 def _obj_to_dict(obj: Any) -> Any:
@@ -116,6 +125,64 @@ def _api_error_message(response: httpx.Response) -> str:
             return str(error["message"])
         return str(error)
     return response.text.strip()
+
+
+def _rate_limit_headers(response: httpx.Response) -> dict[str, str]:
+    header_names = [
+        "retry-after",
+        "x-ratelimit-limit-requests",
+        "x-ratelimit-limit-tokens",
+        "x-ratelimit-remaining-requests",
+        "x-ratelimit-remaining-tokens",
+        "x-ratelimit-reset-requests",
+        "x-ratelimit-reset-tokens",
+    ]
+    return {name: response.headers[name] for name in header_names if name in response.headers}
+
+
+def _parse_rate_limit_message(message: str) -> dict[str, Any]:
+    parsed: dict[str, Any] = {}
+
+    for key in ("Limit", "Used", "Requested"):
+        match = re.search(rf"{key}\s+(\d+)", message, flags=re.IGNORECASE)
+        if match:
+            parsed[key.lower()] = int(match.group(1))
+
+    retry_match = re.search(r"try again in\s+([\d.]+)\s*([a-z]+)", message, flags=re.IGNORECASE)
+    if retry_match:
+        parsed["retry_after"] = f"{retry_match.group(1)}{retry_match.group(2)}"
+
+    return parsed
+
+
+def _response_telemetry(
+    provider: str,
+    model: str,
+    response: httpx.Response,
+    payload: dict[str, Any] | None = None,
+    error_message: str | None = None,
+) -> dict[str, Any]:
+    telemetry: dict[str, Any] = {
+        "provider": provider,
+        "model": model,
+        "status_code": response.status_code,
+        "rate_limit_headers": _rate_limit_headers(response),
+    }
+
+    request_id = response.headers.get("x-request-id")
+    if request_id:
+        telemetry["request_id"] = request_id
+
+    if payload and payload.get("usage"):
+        telemetry["usage"] = payload["usage"]
+
+    if error_message:
+        telemetry["error"] = error_message
+        rate_limit = _parse_rate_limit_message(error_message)
+        if rate_limit:
+            telemetry["rate_limit_error"] = rate_limit
+
+    return telemetry
 
 
 def _parse_tool_arguments(arguments: Any) -> dict[str, Any]:
@@ -228,6 +295,11 @@ async def _run_ollama_agent(
     messages = _base_messages(user_text, history)
     tools = await _get_model_tools()
     trace: list[dict[str, Any]] = []
+    telemetry: dict[str, Any] = {
+        "provider": "ollama",
+        "model": model,
+        "calls": [],
+    }
 
     async with httpx.AsyncClient(timeout=None) as client:
         await _ensure_ollama_model(client, model)
@@ -246,11 +318,15 @@ async def _run_ollama_agent(
                 response.raise_for_status()
             except httpx.HTTPStatusError as exc:
                 detail = _api_error_message(response)
-                raise RuntimeError(
-                    f"Ollama chat request failed for model `{model}`: {detail}"
+                call_telemetry = _response_telemetry("ollama", model, response, error_message=detail)
+                telemetry["calls"].append(call_telemetry)
+                raise ModelAPIError(
+                    f"Ollama chat request failed for model `{model}`: {detail}",
+                    telemetry,
                 ) from exc
 
             payload = response.json()
+            telemetry["calls"].append(_response_telemetry("ollama", model, response, payload))
             assistant_message = payload.get("message", {})
             messages.append(assistant_message)
 
@@ -260,6 +336,7 @@ async def _run_ollama_agent(
                     "answer": assistant_message.get("content", ""),
                     "trace": trace,
                     "messages": messages,
+                    "telemetry": telemetry,
                 }
 
             for call in tool_calls:
@@ -287,6 +364,7 @@ async def _run_ollama_agent(
         "answer": "I reached the configured tool-call limit before producing a final answer.",
         "trace": trace,
         "messages": messages,
+        "telemetry": telemetry,
     }
 
 
@@ -302,6 +380,12 @@ async def _run_groq_agent(
     messages = _base_messages(user_text, history)
     tools = await _get_model_tools()
     trace: list[dict[str, Any]] = []
+    telemetry: dict[str, Any] = {
+        "provider": "groq",
+        "model": model,
+        "max_completion_tokens": GROQ_MAX_COMPLETION_TOKENS,
+        "calls": [],
+    }
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY}",
         "Content-Type": "application/json",
@@ -325,11 +409,15 @@ async def _run_groq_agent(
                 response.raise_for_status()
             except httpx.HTTPStatusError as exc:
                 detail = _api_error_message(response)
-                raise RuntimeError(
-                    f"Groq chat request failed for model `{model}`: {detail}"
+                call_telemetry = _response_telemetry("groq", model, response, error_message=detail)
+                telemetry["calls"].append(call_telemetry)
+                raise ModelAPIError(
+                    f"Groq chat request failed for model `{model}`: {detail}",
+                    telemetry,
                 ) from exc
 
             payload = response.json()
+            telemetry["calls"].append(_response_telemetry("groq", model, response, payload))
             choices = payload.get("choices") or []
             assistant_message = (choices[0].get("message") if choices else {}) or {}
             messages.append(assistant_message)
@@ -340,6 +428,7 @@ async def _run_groq_agent(
                     "answer": assistant_message.get("content", ""),
                     "trace": trace,
                     "messages": messages,
+                    "telemetry": telemetry,
                 }
 
             for call in tool_calls:
@@ -368,6 +457,7 @@ async def _run_groq_agent(
         "answer": "I reached the configured tool-call limit before producing a final answer.",
         "trace": trace,
         "messages": messages,
+        "telemetry": telemetry,
     }
 
 
