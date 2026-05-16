@@ -430,7 +430,10 @@ def _Flood_risk(target_lat: float, target_lon: float) -> str:
     return report_text
 
 
-def _calculate_flood_risk(target_lat: float, target_lon: float) -> str:
+def _calculate_flood_risk(tif_path) -> str:
+    center_coords = _extract_tif_midpoint(tif_path)
+    target_lat = center_coords["center_coords"]["lat"]
+    target_lon = center_coords["center_coords"]["lon"]
     bbox = _bbox_from_point(target_lat, target_lon)
     
     local_tif = r"C:\Users\malad\OneDrive\Device\Makeathon\github_repo\makeathon-2026-panick-attack-real-estate-beyond-rgb\data\output_hh.tif"
@@ -532,6 +535,7 @@ def _calculate_flood_risk(target_lat: float, target_lon: float) -> str:
             pass # Keep going if file handles are still locked by pysheds/rasterio
             
     return report_text
+
 def _calculate_road_proximity(target_lat: float, target_lon: float) -> str:
     print("Querying OpenStreetMap directly from coordinate center point...")
     try:
@@ -720,6 +724,7 @@ def _process_enmap_soil_data(input_file: str) -> tuple[str, pd.DataFrame]:
     return soil_report_text, output_df
 
 @mcp.tool()
+
 def plot_soil_analysis_report(tif_path):
     """Generates a professional visual dashboard for the calculated soil metrics."""
     _, output_df = _process_enmap_soil_data(tif_path)
@@ -735,7 +740,7 @@ def plot_soil_analysis_report(tif_path):
     })
 
     fig, axes = plt.subplots(3, 3, figsize=(18, 14))
-    fig.suptitle("HYPERSPECTRAL SOIL DIAGNOSTIC & RISK REPORT", fontweight="bold", y=0.96)
+    fig.suptitle("HYPERSPECTRAL SOIL DIAGNOSTIC", fontweight="bold", y=0.96)
     ax = axes.flatten()
 
     colors = {
@@ -750,19 +755,30 @@ def plot_soil_analysis_report(tif_path):
     ax[0].legend()
 
     sns.histplot(data=output_df, x="Nitrogen_N_mg_kg", kde=True, ax=ax[1], color=colors["N"], edgecolor="black", alpha=0.7)
+    ax[1].axvline(output_df["Nitrogen_N_mg_kg"].mean(), color="darkred", linestyle="--", label=f"Mean: {output_df['Nitrogen_N_mg_kg'].mean():.1f} mg/kg")
     ax[1].set_title("Total Nitrogen (N %)", fontweight="bold")
+    ax[1].legend()
 
     sns.histplot(data=output_df, x="Phosphorus_P_mg_kg", kde=True, ax=ax[2], color=colors["P"], edgecolor="black", alpha=0.7)
+    ax[2].axvline(output_df["Phosphorus_P_mg_kg"].mean(), color="darkred", linestyle="--", label=f"Mean: {output_df['Phosphorus_P_mg_kg'].mean():.1f} mg/kg")
     ax[2].set_title("Available Phosphorus (P)", fontweight="bold")
+    ax[2].legend()
+
 
     sns.histplot(data=output_df, x="Potassium_K_mg_kg", kde=True, ax=ax[3], color=colors["K"], edgecolor="black", alpha=0.7)
+    ax[3].axvline(output_df["Potassium_K_mg_kg"].mean(), color="darkred", linestyle="--", label=f"Mean: {output_df['Potassium_K_mg_kg'].mean():.1f} mg/kg")
     ax[3].set_title("Exchangeable Potassium (K)", fontweight="bold")
+    ax[3].legend()
 
     sns.histplot(data=output_df, x="Magnesium_Mg_mg_kg", kde=True, ax=ax[4], color=colors["Mg"], edgecolor="black", alpha=0.7)
+    ax[4].axvline(output_df["Magnesium_Mg_mg_kg"].mean(), color="darkred", linestyle="--", label=f"Mean: {output_df['Magnesium_Mg_mg_kg'].mean():.1f} mg/kg")
     ax[4].set_title("Magnesium (Mg)", fontweight="bold")
+    ax[4].legend()
 
     sns.histplot(data=output_df, x="SOM_pct", kde=True, ax=ax[5], color=colors["SOM"], edgecolor="black", alpha=0.7)
+    ax[5].axvline(output_df["SOM_pct"].mean(), color="darkred", linestyle="--", label=f"Mean: {output_df['SOM_pct'].mean():.1f}%")
     ax[5].set_title("Soil Organic Matter (SOM %)", fontweight="bold")
+    ax[5].legend()
 
     scatter = ax[6].scatter(output_df["NDVI"], output_df["SWI"], c=output_df["pH_Assessment"], cmap="viridis", alpha=0.6, s=25)
     ax[6].set_title("NDVI vs SWI (by pH)", fontweight="bold")
@@ -782,18 +798,21 @@ def plot_soil_analysis_report(tif_path):
         f"Mean Potassium (K)  : {output_df['Potassium_K_mg_kg'].mean():.1f} mg/kg\n"
         f"Mean NDVI Baseline  : {output_df['NDVI'].mean():.3f}\n"
         f"Mean Moisture (SWI) : {output_df['SWI'].mean():.3f}\n\n"
-        f"Limiting Factor Note:\n"
-        f"High fertility levels detected. Focus on physical\n"
-        f"topography drainage bottlenecks over fertilization."
     )
     ax[7].text(0.05, 0.95, summary_text, transform=ax[7].transAxes, fontsize=11,
                verticalalignment='top', family='monospace',
                bbox=dict(boxstyle="round,pad=1", facecolor="#f8f9fa", edgecolor="#ccc"))
+    
+    
     ax[8].axis("off")
+
     plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-    plt.savefig('SOIL_DIAGNOSTIC_REPORT.png', dpi=300, bbox_inches="tight")
-    print(f"Report saved successfully to: SOIL_DIAGNOSTIC_REPORT.png")
+    savefig_path = f"SOIL_DIAGNOSTIC_REPORT{os.path.basename(tif_path)}.png"
+    plt.savefig(savefig_path, dpi=300, bbox_inches="tight")
+    print(f"Report saved successfully to: {savefig_path}")
     plt.close()
+
+
 
 @mcp.tool()
 def CREATE_GEO_AND_RISK_REPORT(TIF_DATA_PATH: str) -> str:
