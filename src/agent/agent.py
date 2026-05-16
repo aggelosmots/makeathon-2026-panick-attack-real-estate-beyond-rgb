@@ -22,7 +22,7 @@ GROQ_MODEL      = env_str("GROQ_MODEL", "llama-3.1-8b-instant")
 GROQ_MAX_COMPLETION_TOKENS = env_int("GROQ_MAX_COMPLETION_TOKENS", 512)
 HF_API_BASE     = env_str("HF_API_BASE", "https://router.huggingface.co/v1").rstrip("/")
 HF_TOKEN        = env_str("HF_TOKEN", "")
-HF_MODEL        = env_str("HF_MODEL", "google/gemma-4-E4B-it:fastest")
+HF_MODEL        = env_str("HF_MODEL", "google/gemma-3-27b-it")
 HF_MAX_COMPLETION_TOKENS = env_int("HF_MAX_COMPLETION_TOKENS", 512)
 MCP_SERVER_URL  = env_str("MCP_SERVER_URL", "http://localhost:8000/mcp")
 AGENT_MAX_STEPS = env_int("AGENT_MAX_STEPS", 6)
@@ -32,8 +32,10 @@ AGENT_MAX_STEPS = env_int("AGENT_MAX_STEPS", 6)
 ###
 ###
 ###         WE NEED TO CREATE THE AGENT PROMPT
-SYSTEM_PROMPT = """You are a local agent running inside Docker.
-You can use MCP tools provided to you to access and perform actions on the system and data.
+SYSTEM_PROMPT = """You are an expert AI Real Estate and Agricultural Investment Analyst.
+Your goal is to evaluate four ~250,000 m² land crop areas (priced at ~1M Euro each) and recommend the best investment.
+You have access to MCP tools that can analyze EnMap hyperspectral satellite data. 
+Compare the parcels using spectral indices (like NDVI, NDWI), environmental data, and explain your data-driven methodology clearly.
 """
 ###
 ###
