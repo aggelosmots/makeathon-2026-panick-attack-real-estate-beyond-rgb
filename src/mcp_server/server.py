@@ -639,16 +639,17 @@ def plot_area_spectral_signature(tif_path: str):
     plt.xticks(ticks=range(1, len(band_cols) + 1), labels=band_cols, rotation=45)
     plt.grid(True)
     plt.tight_layout()
-    plt.show()
+    
+    
+    plt.savefig(f"Spectral_Signature_{os.path.basename(tif_path)}.svg", format="svg", bbox_inches="tight")
+
 @mcp.tool()
 def plot_ph_profile(tif_path: str, ax: plt.Axes = None, color: str = "#4f81bd"):
     """Plots the distribution and average marker of soil pH directly from TIF path."""
     _, df = _process_enmap_soil_data(tif_path)
     _apply_global_plot_styles()
     
-    standalone = ax is None
-    if standalone:
-        fig, ax = plt.subplots(figsize=(6, 4.5))
+    ax = plt.subplots(figsize=(6, 4.5))
         
     mean_val = df["pH_Assessment"].mean()
     sns.histplot(data=df, x="pH_Assessment", kde=True, ax=ax, color=color, edgecolor="black", alpha=0.7)
@@ -657,18 +658,17 @@ def plot_ph_profile(tif_path: str, ax: plt.Axes = None, color: str = "#4f81bd"):
     ax.set_xlabel("pH")
     ax.legend()
     
-    if standalone:
-        plt.tight_layout()
-        plt.show()
+
+    plt.tight_layout()
+    plt.savefig(f"PH_Profile_{os.path.basename(tif_path)}.svg", format="svg", bbox_inches="tight")
+
 @mcp.tool()
 def plot_nitrogen_profile(tif_path: str, ax: plt.Axes = None, color: str = "#c0504d"):
     """Plots the distribution and average marker of total Nitrogen directly from TIF path."""
     _, df = _process_enmap_soil_data(tif_path)
     _apply_global_plot_styles()
     
-    standalone = ax is None
-    if standalone:
-        fig, ax = plt.subplots(figsize=(6, 4.5))
+    ax = plt.subplots(figsize=(6, 4.5))
         
     mean_val = df["Nitrogen_N_mg_kg"].mean()
     sns.histplot(data=df, x="Nitrogen_N_mg_kg", kde=True, ax=ax, color=color, edgecolor="black", alpha=0.7)
@@ -676,19 +676,16 @@ def plot_nitrogen_profile(tif_path: str, ax: plt.Axes = None, color: str = "#c05
     ax.set_title("Total Nitrogen (N)", fontweight="bold")
     ax.set_xlabel("Concentration (mg/kg)")
     ax.legend()
-    
-    if standalone:
-        plt.tight_layout()
-        plt.show()
+        
+    plt.tight_layout()
+    plt.savefig(f"Nitrogen_Profile_{os.path.basename(tif_path)}.svg", format="svg", bbox_inches="tight")
+
 @mcp.tool()
 def plot_phosphorus_profile(tif_path: str, ax: plt.Axes = None, color: str = "#9bbb59"):
     """Plots the distribution and average marker of available Phosphorus directly from TIF path."""
     _, df = _process_enmap_soil_data(tif_path)
     _apply_global_plot_styles()
-    
-    standalone = ax is None
-    if standalone:
-        fig, ax = plt.subplots(figsize=(6, 4.5))
+    ax = plt.subplots(figsize=(6, 4.5))
         
     mean_val = df["Phosphorus_P_mg_kg"].mean()
     sns.histplot(data=df, x="Phosphorus_P_mg_kg", kde=True, ax=ax, color=color, edgecolor="black", alpha=0.7)
@@ -697,18 +694,16 @@ def plot_phosphorus_profile(tif_path: str, ax: plt.Axes = None, color: str = "#9
     ax.set_xlabel("Concentration (mg/kg)")
     ax.legend()
     
-    if standalone:
-        plt.tight_layout()
-        plt.show()
+    plt.tight_layout()
+    plt.savefig(f"Phosphorus_Profile_{os.path.basename(tif_path)}.svg", format="svg", bbox_inches="tight")
+       
 @mcp.tool()
 def plot_potassium_profile(tif_path: str, ax: plt.Axes = None, color: str = "#8064a2"):
     """Plots the distribution and average marker of exchangeable Potassium directly from TIF path."""
     _, df = _process_enmap_soil_data(tif_path)
     _apply_global_plot_styles()
     
-    standalone = ax is None
-    if standalone:
-        fig, ax = plt.subplots(figsize=(6, 4.5))
+    ax = plt.subplots(figsize=(6, 4.5))
         
     mean_val = df["Potassium_K_mg_kg"].mean()
     sns.histplot(data=df, x="Potassium_K_mg_kg", kde=True, ax=ax, color=color, edgecolor="black", alpha=0.7)
@@ -717,9 +712,8 @@ def plot_potassium_profile(tif_path: str, ax: plt.Axes = None, color: str = "#80
     ax.set_xlabel("Concentration (mg/kg)")
     ax.legend()
     
-    if standalone:
-        plt.tight_layout()
-        plt.show()
+    plt.savefig(f"Potassium_Profile_{os.path.basename(tif_path)}.svg", format="svg", bbox_inches="tight")
+
 @mcp.tool()
 def plot_magnesium_profile(tif_path: str, ax: plt.Axes = None, color: str = "#4bacc6"):
     """Plots the distribution and average marker of Magnesium directly from TIF path."""
@@ -727,8 +721,8 @@ def plot_magnesium_profile(tif_path: str, ax: plt.Axes = None, color: str = "#4b
     _apply_global_plot_styles()
     
     standalone = ax is None
-    if standalone:
-        fig, ax = plt.subplots(figsize=(6, 4.5))
+    
+    ax = plt.subplots(figsize=(6, 4.5))
         
     mean_val = df["Magnesium_Mg_mg_kg"].mean()
     sns.histplot(data=df, x="Magnesium_Mg_mg_kg", kde=True, ax=ax, color=color, edgecolor="black", alpha=0.7)
@@ -736,19 +730,15 @@ def plot_magnesium_profile(tif_path: str, ax: plt.Axes = None, color: str = "#4b
     ax.set_title("Magnesium (Mg)", fontweight="bold")
     ax.set_xlabel("Concentration (mg/kg)")
     ax.legend()
-    
-    if standalone:
-        plt.tight_layout()
-        plt.show()
+    plt.tight_layout()
+    plt.savefig(f"Magnesium_Profile_{os.path.basename(tif_path)}.svg", format="svg", bbox_inches="tight")
+
 @mcp.tool()
 def plot_som_profile(tif_path: str, ax: plt.Axes = None, color: str = "#f79646"):
     """Plots the distribution and average marker of Soil Organic Matter directly from TIF path."""
     _, df = _process_enmap_soil_data(tif_path)
     _apply_global_plot_styles()
-    
-    standalone = ax is None
-    if standalone:
-        fig, ax = plt.subplots(figsize=(6, 4.5))
+    ax = plt.subplots(figsize=(6, 4.5))
         
     mean_val = df["SOM_pct"].mean()
     sns.histplot(data=df, x="SOM_pct", kde=True, ax=ax, color=color, edgecolor="black", alpha=0.7)
@@ -756,19 +746,18 @@ def plot_som_profile(tif_path: str, ax: plt.Axes = None, color: str = "#f79646")
     ax.set_title("Soil Organic Matter (SOM %)", fontweight="bold")
     ax.set_xlabel("Organic Matter (%)")
     ax.legend()
-    
-    if standalone:
-        plt.tight_layout()
-        plt.show()
+
+    plt.tight_layout()
+    plt.savefig(f"SOM_Profile_{os.path.basename(tif_path)}.svg", format="svg", bbox_inches="tight")
+
 @mcp.tool()
 def plot_ndvi_vs_swi_scatter(tif_path: str, ax: plt.Axes = None, fig: plt.Figure = None):
     """Generates a vegetation health vs soil moisture index cross-plot directly from TIF path."""
     _, df = _process_enmap_soil_data(tif_path)
     _apply_global_plot_styles()
     
-    standalone = ax is None
-    if standalone:
-        fig, ax = plt.subplots(figsize=(7, 5.5))
+
+    ax = plt.subplots(figsize=(7, 5.5))
         
     scatter = ax.scatter(df["NDVI"], df["SWI"], c=df["pH_Assessment"], cmap="viridis", alpha=0.6, s=25)
     ax.set_title("NDVI vs SWI (by pH)", fontweight="bold")
@@ -782,36 +771,10 @@ def plot_ndvi_vs_swi_scatter(tif_path: str, ax: plt.Axes = None, fig: plt.Figure
         cbar = plt.colorbar(scatter, ax=ax)
         cbar.set_label("pH", size=9)
         
-    if standalone:
-        plt.tight_layout()
-        plt.show()
-@mcp.tool()
-def render_agromanagement_textbox(tif_path: str, ax: plt.Axes = None):
-    """Builds a formatted descriptive summary table inside a canvas bounding box directly from TIF path."""
-    _, df = _process_enmap_soil_data(tif_path)
     
-    standalone = ax is None
-    if standalone:
-        fig, ax = plt.subplots(figsize=(6, 4.5))
-        
-    ax.axis("off")
-    summary_text = (
-        f"=== AGROMANAGEMENT METRICS ===\n\n"
-        f"Total Samples Bound : {len(df)} pixels\n"
-        f"Mean Soil pH        : {df['pH_Assessment'].mean():.2f}\n"
-        f"Mean SOM Buffer     : {df['SOM_pct'].mean():.2f}%\n"
-        f"Mean Nitrogen (N)   : {df['Nitrogen_N_mg_kg'].mean():.1f} mg/kg\n"
-        f"Mean Phosphorus (P) : {df['Phosphorus_P_mg_kg'].mean():.1f} mg/kg\n"
-        f"Mean Potassium (K)  : {df['Potassium_K_mg_kg'].mean():.1f} mg/kg\n"
-        f"Mean NDVI Baseline  : {df['NDVI'].mean():.3f}\n"
-        f"Mean Moisture (SWI) : {df['SWI'].mean():.3f}\n"
-    )
-    ax.text(0.05, 0.95, summary_text, transform=ax.transAxes, fontsize=11,
-            verticalalignment='top', family='monospace',
-            bbox=dict(boxstyle="round,pad=1", facecolor="#f8f9fa", edgecolor="#ccc"))
-            
-    if standalone:
-        plt.show()
+    plt.tight_layout()
+    plt.savefig(f"NDVI_SWI_{os.path.basename(tif_path)}.svg", format="svg", bbox_inches="tight")
+
 @mcp.tool()
 def CREATE_GEO_AND_RISK_REPORT(TIF_DATA_PATH: str) -> str:
     """Generate a comprehensive geo-spatial and risk report based on the provided GeoTIFF file."""
