@@ -521,7 +521,6 @@ def _process_enmap_soil_data(input_file: str) -> str:
     print(soil_report_text)
     return soil_report_text ,output_df
 
-@mcp.tool()
 
 
 @mcp.tool()
