@@ -87,21 +87,7 @@ def _file_info(path: Path) -> dict[str, Any]:
         "modified_epoch": int(stat.st_mtime),
     }
 def _tif_to_dataframe(tif_path: str) -> pd.DataFrame:
-    """Converts a multi-band GeoTIFF file into a flattened pandas DataFrame.
-    
-    Parameters:
-    -----------
-    tif_path : str
-        Path to the input .TIF file.
-    max_pixels : int, optional
-        Maximum number of pixels to randomly sample (to prevent memory crashes 
-        on massive orthomosaics). Set to None to extract all pixels.
-        
-    Returns:
-    --------
-    pd.DataFrame
-        A DataFrame where each row is a pixel and columns represent spectral bands.
-    """
+    "THIS FUNCTION CONVERTS A HYPERSPECTRAL TIFF INTO A FLAT DATAFRAME WITH AUTO-SCALE AND INTERPOLATION"
     print(f"Opening geospatial raster: {tif_path}")
     
     with rasterio.open(tif_path) as src:
@@ -113,27 +99,19 @@ def _tif_to_dataframe(tif_path: str) -> pd.DataFrame:
         print(f"Image Dimensions: {height}x{width} ({num_pixels} total pixels)")
         print(f"Detected Spectral Layers: {num_bands} bands")
         
-        # Read all bands into a single numpy array: shape (bands, height, width)
-        img_data = src.read()
-        
-        # Determine pixel indices to extract (sampling vs extracting everything)
-       
+        img_data = src.read()       
         indices = np.arange(num_pixels)
             
-        # Extract band data into a dictionary structure
         band_data = {}
         for b in range(1, num_bands + 1):
-            # Flatten spatial grid dimensions (height * width) to 1D array
             band_flattened = img_data[b-1].flatten()
             sampled_pixels = band_flattened[indices]
             
-            # Auto-scale reflectance if the raster stores values as large integers (e.g., 0-10000)
             if np.nanmax(sampled_pixels) > 1.0:
                 sampled_pixels = sampled_pixels / 10000.0
                 
             band_data[f'Band_{b}'] = sampled_pixels
             
-        # Construct DataFrame and append identification keys
         df = pd.DataFrame(band_data)
         df.insert(0, 'Pixel_ID', np.arange(len(df)))
         
@@ -435,8 +413,8 @@ def _calculate_flood_risk(tif_path) -> str:
     target_lat = center_coords["center_coords"]["lat"]
     target_lon = center_coords["center_coords"]["lon"]
     bbox = _bbox_from_point(target_lat, target_lon)
-    
-    local_tif = r"C:\Users\malad\OneDrive\Device\Makeathon\github_repo\makeathon-2026-panick-attack-real-estate-beyond-rgb\data\output_hh.tif"
+    dem_folder = r"C:\Users\malad\OneDrive\Device\Makeathon\github_repo\makeathon-2026-panick-attack-real-estate-beyond-rgb\data\dem"
+    local_tif = os.path.join(dem_folder, "output_hh.tif")
     temp_clipped_tif = "temp_greece_dem.tif"
     
     print(f"Reading and clipping local DEM: {local_tif}...")
@@ -724,7 +702,6 @@ def _process_enmap_soil_data(input_file: str) -> tuple[str, pd.DataFrame]:
     return soil_report_text, output_df
 
 @mcp.tool()
-
 def plot_soil_analysis_report(tif_path):
     """Generates a professional visual dashboard for the calculated soil metrics."""
     _, output_df = _process_enmap_soil_data(tif_path)
@@ -811,8 +788,6 @@ def plot_soil_analysis_report(tif_path):
     plt.savefig(savefig_path, dpi=300, bbox_inches="tight")
     print(f"Report saved successfully to: {savefig_path}")
     plt.close()
-
-
 
 @mcp.tool()
 def CREATE_GEO_AND_RISK_REPORT(TIF_DATA_PATH: str) -> str:
