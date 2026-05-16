@@ -17,7 +17,7 @@ MODEL_PROVIDER  = env_str("MODEL_PROVIDER", "huggingface").strip().lower()
 HF_API_BASE     = env_str("HF_API_BASE", "https://router.huggingface.co/v1").rstrip("/")
 HF_TOKEN        = env_str("HF_TOKEN", "")
 HF_MODEL        = env_str("HF_MODEL", "google/gemma-3-27b-it")
-HF_MAX_COMPLETION_TOKENS = env_int("HF_MAX_COMPLETION_TOKENS", 512)
+HF_MAX_COMPLETION_TOKENS = env_int("HF_MAX_COMPLETION_TOKENS", 4096)
 MCP_SERVER_URL  = env_str("MCP_SERVER_URL", "http://localhost:8000/mcp")
 AGENT_MAX_STEPS = env_int("AGENT_MAX_STEPS", 6)
 
@@ -292,8 +292,12 @@ async def _get_model_tools() -> list[dict[str, Any]]:
     return [_mcp_tool_to_openai_schema(t) for t in mcp_tools]
 
 
-def _base_messages(user_text: str, history: list[dict[str, str]] | None) -> list[dict[str, Any]]:
-    messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM_PROMPT}]
+def _base_messages(
+    user_text: str,
+    history: list[dict[str, str]] | None,
+    system_prompt: str | None = None,
+) -> list[dict[str, Any]]:
+    messages: list[dict[str, Any]] = [{"role": "system", "content": system_prompt or SYSTEM_PROMPT}]
     if history:
         for msg in history:
             if msg.get("role") in {"user", "assistant"}:
@@ -307,11 +311,12 @@ async def _run_huggingface_agent(
     history: list[dict[str, str]] | None,
     model: str,
     max_steps: int,
+    system_prompt: str | None = None,
 ) -> dict[str, Any]:
     if not HF_TOKEN:
         raise RuntimeError("HF_TOKEN is not set. Create a Hugging Face access token and add it to `.env`.")
 
-    messages = _base_messages(user_text, history)
+    messages = _base_messages(user_text, history, system_prompt)
     tools = await _get_model_tools()
     trace: list[dict[str, Any]] = []
     telemetry: dict[str, Any] = {
@@ -401,6 +406,7 @@ async def ask_agent(
     provider: str | None = None,
     model: str | None = None,
     max_steps: int | None = None,
+    system_prompt: str | None = None,
 ) -> dict[str, Any]:
     """Run a model + MCP tool-calling loop and return final answer plus trace."""
     provider = (provider or MODEL_PROVIDER).strip().lower()
@@ -408,7 +414,7 @@ async def ask_agent(
     max_steps = max_steps or AGENT_MAX_STEPS
 
     if provider == "huggingface":
-        return await _run_huggingface_agent(user_text, history, model, max_steps)
+        return await _run_huggingface_agent(user_text, history, model, max_steps, system_prompt)
     raise ValueError(f"Unsupported model provider: {provider}")
 
 
@@ -418,7 +424,15 @@ def ask_agent_sync(
     provider: str | None = None,
     model: str | None = None,
     max_steps: int | None = None,
+    system_prompt: str | None = None,
 ) -> dict[str, Any]:
     return asyncio.run(
-        ask_agent(user_text, history=history, provider=provider, model=model, max_steps=max_steps)
+        ask_agent(
+            user_text,
+            history=history,
+            provider=provider,
+            model=model,
+            max_steps=max_steps,
+            system_prompt=system_prompt,
+        )
     )
