@@ -26,13 +26,7 @@ MCP_HOST = env_str("MCP_HOST", "0.0.0.0")
 MCP_PORT = env_int("MCP_PORT", 8000)
 ALLOW_WRITE_TO_DATA = env_bool("ALLOW_WRITE_TO_DATA", False)
 
-mcp = FastMCP(
-    "local-data-toolset",
-    host=MCP_HOST,
-    port=MCP_PORT,
-    streamable_http_path="/mcp",
-)
-
+mcp = FastMCP( "local-data-toolset", host=MCP_HOST, port=MCP_PORT, streamable_http_path="/mcp")
 
 def _safe_path(relative_path: str | None = ".") -> Path:
     """Resolve a user path under DATA_ROOT and block path traversal."""

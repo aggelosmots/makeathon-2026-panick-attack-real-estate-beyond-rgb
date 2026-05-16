@@ -10,6 +10,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
     curl \
     ca-certificates \
+    default-jdk-headless \
     libexpat1 \
     gdal-bin \
     libgdal-dev \
@@ -21,10 +22,11 @@ RUN apt-get update \
 COPY requirements.txt .
 RUN pip install -r requirements.txt
 
-COPY .streamlit ./.streamlit
 COPY src ./src
+RUN mkdir -p build/classes \
+    && javac -d build/classes $(find src/main/java -name "*.java")
 
 ENV PYTHONPATH=/app
 
 # The compose file chooses the final command.
-CMD ["streamlit", "run", "src/ui/app.py", "--server.address=0.0.0.0", "--server.port=8501"]
+CMD ["java", "-cp", "/app/build/classes", "com.beyondrgb.AppServer"]
