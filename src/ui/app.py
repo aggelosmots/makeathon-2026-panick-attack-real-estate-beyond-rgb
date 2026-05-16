@@ -7,10 +7,8 @@ from typing import Any
 import streamlit as st
 
 from src.agent.agent import (
-    GROQ_API_BASE,
     HF_API_BASE,
     MODEL_PROVIDER,
-    OLLAMA_HOST,
     ask_agent,
     default_model_for_provider,
     list_mcp_tools,
@@ -19,7 +17,7 @@ from src.agent.agent import (
 from src.common_config import DATA_ROOT, env_int, env_str
 
 MAX_STEPS = env_int("AGENT_MAX_STEPS", 6)
-PROVIDERS = ["groq", "huggingface", "ollama"]
+PROVIDERS = ["huggingface"]
 
 
 def run_async(coro):
@@ -305,12 +303,7 @@ with st.sidebar:
     max_steps = st.number_input("Max tool-call steps", min_value=1, max_value=20, value=MAX_STEPS)
     st.caption(f"Shared data path inside container: `{DATA_ROOT}`")
     st.caption(f"MCP server: `{env_str('MCP_SERVER_URL', 'http://localhost:8000/mcp')}`")
-    if provider == "groq":
-        st.caption(f"Groq API: `{GROQ_API_BASE}`")
-    elif provider == "huggingface":
-        st.caption(f"Hugging Face API: `{HF_API_BASE}`")
-    else:
-        st.caption(f"Ollama host: `{OLLAMA_HOST}`")
+    st.caption(f"Hugging Face API: `{HF_API_BASE}`")
 
     if st.button("Show provider models", use_container_width=True):
         try:

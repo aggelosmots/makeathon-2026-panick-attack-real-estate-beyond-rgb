@@ -1,8 +1,8 @@
-# Hugging Face/Groq/Ollama + MCP Data Agent
+# Hugging Face + MCP Data Agent
 
 Dockerized starter system for a web-based agent that can inspect files in a host-mounted `./data` folder through MCP tools.
 
-The system supports hosted inference through **Hugging Face Inference Providers** and **Groq**, plus optional local inference through **Ollama**. Hugging Face can be used to try Gemma 4 without running the model locally.
+The system supports hosted inference through **Hugging Face Inference Providers**.
 
 ## Architecture
 
@@ -17,13 +17,13 @@ model agent
    |
    | OpenAI-compatible chat/tool API
    v
-Hugging Face or Groq hosted inference
+Hugging Face hosted inference
 ```
 
 ## Requirements
 
 - Docker Engine with Docker Compose v2
-- A Hugging Face token from `https://huggingface.co/settings/tokens`, or a Groq API key from `https://console.groq.com/keys`
+- A Hugging Face token from `https://huggingface.co/settings/tokens`
 - Internet access from the `agent-ui` container
 
 ## Quick Start
@@ -34,21 +34,12 @@ Hugging Face or Groq hosted inference
 cp .env.example .env
 ```
 
-2. Edit `.env` and set one hosted provider token.
-
-For Hugging Face Gemma 4:
+2. Edit `.env` and set your Hugging Face token.
 
 ```env
 MODEL_PROVIDER=huggingface
 HF_TOKEN=your_hugging_face_token_here
-HF_MODEL=google/gemma-4-E4B-it:fastest
-```
-
-For Groq:
-
-```env
-MODEL_PROVIDER=groq
-GROQ_API_KEY=your_groq_api_key_here
+HF_MODEL=google/gemma-3-27b-it
 ```
 
 3. Start the system:
@@ -81,7 +72,6 @@ Search the data folder for testing.
 
 - `agent-ui`: Streamlit web UI and agent loop.
 - `mcp-tools`: MCP Streamable HTTP server exposing file/data tools.
-- `ollama`: optional local model runtime, only started with the `ollama` profile.
 
 Check status:
 
@@ -109,15 +99,10 @@ Main `.env` settings:
 HOST_DATA_DIR=./data
 CONTAINER_DATA_DIR=/workspace/data
 
-MODEL_PROVIDER=groq
-GROQ_API_BASE=https://api.groq.com/openai/v1
-GROQ_API_KEY=your_groq_api_key_here
-GROQ_MODEL=llama-3.1-8b-instant
-GROQ_MAX_COMPLETION_TOKENS=512
-
+MODEL_PROVIDER=huggingface
 HF_API_BASE=https://router.huggingface.co/v1
 HF_TOKEN=your_hugging_face_token_here
-HF_MODEL=google/gemma-4-E4B-it:fastest
+HF_MODEL=google/gemma-3-27b-it
 HF_MAX_COMPLETION_TOKENS=512
 
 ALLOW_WRITE_TO_DATA=false
@@ -127,22 +112,12 @@ UI_PORT=8501
 MCP_PORT=8000
 ```
 
-`GROQ_MAX_COMPLETION_TOKENS=512` is intentionally modest to reduce free-tier rate-limit errors.
-
-To try Gemma 4 from Hugging Face, set:
-
-```env
-MODEL_PROVIDER=huggingface
-HF_MODEL=google/gemma-4-E4B-it:fastest
-```
-
-Hugging Face's OpenAI-compatible router uses `https://router.huggingface.co/v1`. The `:fastest` suffix lets the router choose the fastest available inference provider for that model.
+Hugging Face's OpenAI-compatible router uses `https://router.huggingface.co/v1`.
 
 ## UI Usage
 
 The sidebar lets you:
 
-- Select `huggingface`, `groq`, or `ollama`.
 - Change the model name.
 - Change max tool-call steps.
 - Show provider models.
@@ -205,33 +180,6 @@ Rebuild:
 docker compose up --build -d mcp-tools agent-ui
 ```
 
-## Optional Local Ollama
-
-Local inference needs a capable machine. To use Ollama anyway:
-
-1. Set `.env`:
-
-```env
-MODEL_PROVIDER=ollama
-OLLAMA_MODEL=qwen3:8b
-```
-
-2. Start with the Ollama profile:
-
-```bash
-docker compose --profile ollama up --build -d
-```
-
-3. Pull a model:
-
-```bash
-docker compose exec ollama ollama pull qwen3:8b
-```
-
-4. Open the UI at `http://localhost:8501`.
-
-On Linux with NVIDIA Container Toolkit, you can enable GPU for Ollama by uncommenting `gpus: all` in `docker-compose.yml`.
-
 ## Troubleshooting
 
 ### `HF_TOKEN is not set`
@@ -244,29 +192,7 @@ docker compose up -d agent-ui
 
 ### Hugging Face model/provider error
 
-The Hugging Face router may reject a model if no provider is available for your account or if the selected provider does not support the requested chat/tool features. Try listing models from the UI, remove the `:fastest` suffix, or switch to another Gemma 4 model available to your account.
-
-### `GROQ_API_KEY is not set`
-
-Add your key to `.env`, then restart:
-
-```bash
-docker compose up -d agent-ui
-```
-
-### Groq rate limit or TPM error
-
-Wait for the rate window to clear, start a fresh chat, or lower:
-
-```env
-GROQ_MAX_COMPLETION_TOKENS=256
-```
-
-Then restart:
-
-```bash
-docker compose up -d agent-ui
-```
+The Hugging Face router may reject a model if no provider is available for your account or if the selected provider does not support the requested chat/tool features. Try listing models from the UI or switch to another model available to your account.
 
 ### MCP tools do not list
 

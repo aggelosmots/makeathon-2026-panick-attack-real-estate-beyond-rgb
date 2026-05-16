@@ -1,16 +1,4 @@
 services:
-  ollama:
-    image: ollama/ollama:latest
-    profiles:
-      - ollama
-    restart: unless-stopped
-    ports:
-      - "${OLLAMA_PORT:-11434}:11434"
-    volumes:
-      - ollama_models:/root/.ollama
-    # Uncomment on Linux hosts with NVIDIA Container Toolkit installed:
-    # gpus: all
-
   mcp-tools:
     build:
       context: .
@@ -36,17 +24,11 @@ services:
     depends_on:
       - mcp-tools
     environment:
-      MODEL_PROVIDER: ${MODEL_PROVIDER:-groq}
-      GROQ_API_BASE: ${GROQ_API_BASE:-https://api.groq.com/openai/v1}
-      GROQ_API_KEY: ${GROQ_API_KEY:-}
-      GROQ_MODEL: ${GROQ_MODEL:-llama-3.1-8b-instant}
-      GROQ_MAX_COMPLETION_TOKENS: ${GROQ_MAX_COMPLETION_TOKENS:-512}
+      MODEL_PROVIDER: ${MODEL_PROVIDER:-huggingface}
       HF_API_BASE: ${HF_API_BASE:-https://router.huggingface.co/v1}
       HF_TOKEN: ${HF_TOKEN:-}
-      HF_MODEL: ${HF_MODEL:-google/gemma-4-E4B-it:fastest}
+      HF_MODEL: ${HF_MODEL:-google/gemma-3-27b-it}
       HF_MAX_COMPLETION_TOKENS: ${HF_MAX_COMPLETION_TOKENS:-512}
-      OLLAMA_HOST: http://ollama:11434
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3:8b}
       MCP_SERVER_URL: http://mcp-tools:8000/mcp
       DATA_ROOT: ${CONTAINER_DATA_DIR:-/workspace/data}
       AGENT_MAX_STEPS: ${AGENT_MAX_STEPS:-6}
@@ -54,6 +36,3 @@ services:
       - ${HOST_DATA_DIR:-./data}:${CONTAINER_DATA_DIR:-/workspace/data}
     ports:
       - "${UI_PORT:-8501}:8501"
-
-volumes:
-  ollama_models:
