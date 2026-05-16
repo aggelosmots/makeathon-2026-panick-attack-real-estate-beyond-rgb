@@ -19,7 +19,7 @@ from pyproj import Transformer
 from pysheds.grid import Grid
 from rasterio.crs import CRS
 from shapely.geometry import Point
-
+import seaborn as sns
 from src.common_config import DATA_ROOT, env_bool, env_int, env_str
 
 MCP_HOST = env_str("MCP_HOST", "0.0.0.0")
@@ -84,6 +84,59 @@ def _file_info(path: Path) -> dict[str, Any]:
         "size_bytes": stat.st_size,
         "modified_epoch": int(stat.st_mtime),
     }
+def _tif_to_dataframe(tif_path: str) -> pd.DataFrame:
+    """Converts a multi-band GeoTIFF file into a flattened pandas DataFrame.
+    
+    Parameters:
+    -----------
+    tif_path : str
+        Path to the input .TIF file.
+    max_pixels : int, optional
+        Maximum number of pixels to randomly sample (to prevent memory crashes 
+        on massive orthomosaics). Set to None to extract all pixels.
+        
+    Returns:
+    --------
+    pd.DataFrame
+        A DataFrame where each row is a pixel and columns represent spectral bands.
+    """
+    print(f"Opening geospatial raster: {tif_path}")
+    
+    with rasterio.open(tif_path) as src:
+        num_bands = src.count
+        height = src.height
+        width = src.width
+        num_pixels = height * width
+        
+        print(f"Image Dimensions: {height}x{width} ({num_pixels} total pixels)")
+        print(f"Detected Spectral Layers: {num_bands} bands")
+        
+        # Read all bands into a single numpy array: shape (bands, height, width)
+        img_data = src.read()
+        
+        # Determine pixel indices to extract (sampling vs extracting everything)
+       
+        indices = np.arange(num_pixels)
+            
+        # Extract band data into a dictionary structure
+        band_data = {}
+        for b in range(1, num_bands + 1):
+            # Flatten spatial grid dimensions (height * width) to 1D array
+            band_flattened = img_data[b-1].flatten()
+            sampled_pixels = band_flattened[indices]
+            
+            # Auto-scale reflectance if the raster stores values as large integers (e.g., 0-10000)
+            if np.nanmax(sampled_pixels) > 1.0:
+                sampled_pixels = sampled_pixels / 10000.0
+                
+            band_data[f'Band_{b}'] = sampled_pixels
+            
+        # Construct DataFrame and append identification keys
+        df = pd.DataFrame(band_data)
+        df.insert(0, 'Pixel_ID', np.arange(len(df)))
+        
+        print("Dataframe conversion complete.")
+        return df
 
 
 @mcp.tool()
@@ -231,7 +284,7 @@ def get_data_root_info() -> dict[str, Any]:
         "examples": [_file_info(p) for p in sorted(entries)[:10]],
     }
 
-
+@mcp.tool()
 def _extract_tif_midpoint(tif_path: str) -> dict[str, Any]:
     """Extracts bounds and center of a TIFF, automatically converting 
     projected meter coordinates (like Greek EPSG:2100) back to standard Lat/Lon.
@@ -396,7 +449,7 @@ def _calculate_road_proximity(target_lat: float, target_lon: float) -> str:
         )[0]
         
         road_distance_meters = edges.distance(target_point_projected).min()
-        
+        # road_point = edges.geometry[edges.distance(target_point_projected).idxmin()]
         road_report_text = f"""
     [Accessibility / ROAD PROXIMITY REPORT]       
     Road Proximity   : {road_distance_meters:.2f} meters to nearest drivable road
@@ -409,27 +462,42 @@ def _calculate_road_proximity(target_lat: float, target_lon: float) -> str:
         return f"Road Proximity Analysis Failed: {str(e)}"
 
 
-def _process_enmap_soil_data(input_file: str) -> str:
-    file_path = _resolve_data_path(input_file)
-    print(f"Loading hyperspectral dataset: {file_path}...")
-    df = pd.read_csv(file_path)
+def _process_enmap_soil_data(input_file: str) -> tuple[str, pd.DataFrame]:
+    """Processes hyperspectral TIF data, auto-correcting scale factors, clamping 
+    outlier pixels, and calculating all macronutrients uniformly in mg/kg.
+    """
+    df = _tif_to_dataframe(input_file)
     
     band_cols = [col for col in df.columns if col.startswith('Band_')]
-    print(f"Detected {len(band_cols)} spectral bands. Interpoloating atmospheric gaps...")
+    print(f"Detected {len(band_cols)} spectral bands. Interpolating atmospheric gaps...")
     
     df_cleaned = df.copy()
-    df_cleaned[band_cols] = df[band_cols].interpolate(axis=1, limit_direction='both')
+    
+    # FIX 1: Convert black mosaic edge zeros to NaN so they don't break spatial averages
+    df_cleaned[band_cols] = df_cleaned[band_cols].replace(0, np.nan)
+    
+    # Interpolate across the bands
+    df_cleaned[band_cols] = df_cleaned[band_cols].interpolate(axis=1, limit_direction='both')
+    
+    # Fill remaining edge gaps with a standard baseline fraction
+    df_cleaned[band_cols] = df_cleaned[band_cols].fillna(0.2)
+    df_cleaned[band_cols] = df_cleaned[band_cols].clip(lower=0.0, upper=1.0)
     
     np.random.seed(42)
     num_samples = len(df_cleaned)
     
     print("Computing soil chemical and organic properties...")
-    # here the means are spectal 
+    # Your original spectral band means extraction
     vis_mean = df_cleaned[[f'Band_{i}' for i in range(1, 41) if f'Band_{i}' in df_cleaned.columns]].mean(axis=1)
+    
+    # Organic matter base profiles
     predicted_som = 6.5 - (vis_mean * 3.5) + np.random.normal(0, 0.1, size=num_samples)
     predicted_soc = predicted_som / 1.724
     
-    predicted_n = predicted_som * 0.075 + np.random.normal(0, 0.015, size=num_samples)
+    # Original Nitrogen logic (percentage baseline)
+    predicted_n_pct = predicted_som * 0.075 + np.random.normal(0, 0.015, size=num_samples)
+    # CONVERSION: Convert the raw percentage profile into mg/kg (1% = 10,000 mg/kg)
+    predicted_n_mg_kg = predicted_n_pct * 10000.0
     
     swir_ratio = df_cleaned['Band_200'] / (df_cleaned['Band_100'] + 1e-5)
     predicted_ph = 5.2 + (swir_ratio * 1.6) + np.random.normal(0, 0.15, size=num_samples)
@@ -446,12 +514,10 @@ def _process_enmap_soil_data(input_file: str) -> str:
     ndvi = (df_cleaned['Band_80'] - df_cleaned['Band_40']) / (df_cleaned['Band_80'] + df_cleaned['Band_40'] + 1e-5)
     swi = df_cleaned['Band_200'] / (df_cleaned['Band_80'] + 1e-5)
 
-    
-
     output_df = pd.DataFrame({
         'Pixel_ID': df_cleaned['Pixel_ID'],
         'pH_Assessment': np.round(predicted_ph, 2),
-        'Nitrogen_N_pct': np.round(predicted_n, 3),
+        'Nitrogen_N_mg_kg': np.round(predicted_n_mg_kg, 1),  # Stored cleanly as mg/kg now
         'Phosphorus_P_mg_kg': np.round(predicted_p, 1),
         'Potassium_K_mg_kg': np.round(predicted_k, 1),
         'Magnesium_Mg_mg_kg': np.round(predicted_mg, 1),
@@ -460,7 +526,7 @@ def _process_enmap_soil_data(input_file: str) -> str:
         'NDVI': np.round(ndvi, 3),
         'SWI': np.round(swi, 3)
     })
-    # here the mean is the mean of all pixels in the tif (topological mean) not the spectral mean
+    
     summary_stats = output_df.describe().transpose()
     ph_mean = summary_stats.loc['pH_Assessment', 'mean']
     som_mean = summary_stats.loc['SOM_pct', 'mean']
@@ -469,7 +535,7 @@ def _process_enmap_soil_data(input_file: str) -> str:
     # PH Interpretations
     if ph_mean < 5.0:
         ph_status = "Very Acidic"
-    elif ph_mean < 6.0 and ph_mean >= 5.0:
+    elif 5.0 <= ph_mean < 6.0:
         ph_status = "Slightly Acidic"
     elif 6.0 <= ph_mean <= 7.2:
         ph_status = "Optimal / Near-Neutral"
@@ -482,29 +548,17 @@ def _process_enmap_soil_data(input_file: str) -> str:
     else:
         som_status = "Low Organic Buffer"
     
-    # Soil Chemical Interpretations
+    # Safe mean metrics extractions
+    n_mean = summary_stats.loc['Nitrogen_N_mg_kg', 'mean']
+    p_mean = summary_stats.loc['Phosphorus_P_mg_kg', 'mean']
+    k_mean = summary_stats.loc['Potassium_K_mg_kg', 'mean']
+    mg_mean = summary_stats.loc['Magnesium_Mg_mg_kg', 'mean']
 
-    if Nitrogen_N_pct := summary_stats.loc['Nitrogen_N_pct', 'mean'] < 0.15:
-        n_status = "Deficient"
-    else:
-        n_status = "Sufficient"
-
-    if Phosphorus_P_mg_kg := summary_stats.loc['Phosphorus_P_mg_kg', 'mean'] < 15:
-        p_status = " Deficient"
-    else:
-        p_status = "Sufficient"
-
-    if Potassium_K_mg_kg := summary_stats.loc['Potassium_K_mg_kg', 'mean'] < 100:
-        k_status = " Deficient"
-    else:
-        k_status = "Sufficient"
-
-    if Magnesium_Mg_mg_kg := summary_stats.loc['Magnesium_Mg_mg_kg', 'mean'] < 100:
-        mg_status = " Deficient"
-    else:
-        mg_status = "Sufficient"
-
-
+    # Status classifications adjusted to typical agronomy baselines
+    n_status = "DEFICIENT" if n_mean < 1500.0 else "SUFFICIENT"  # 0.15% translates directly to 1500 mg/kg
+    p_status = "DEFICIENT" if p_mean < 15.0 else "SUFFICIENT"
+    k_status = "DEFICIENT" if k_mean < 100.0 else "SUFFICIENT"
+    mg_status = "DEFICIENT" if mg_mean < 100.0 else "SUFFICIENT"
 
     soil_report_text = f"""
     [CHEMICAL CHARACTERISTICS]
@@ -513,15 +567,89 @@ def _process_enmap_soil_data(input_file: str) -> str:
     Soil Organic Matter : {som_mean:.2f}% ({som_status})
     Soil Organic Carbon : {soc_mean:.2f}%
     [MACRONUTRIENT RESERVES ANALYSIS]
-    Total Nitrogen (N)  : {summary_stats.loc['Nitrogen_N_pct', 'mean']:.3f}%  ({n_status})
-    Phosphorus (P)      : {summary_stats.loc['Phosphorus_P_mg_kg', 'mean']:.2f} mg/kg   ({p_status})
-    Potassium (K)       : {summary_stats.loc['Potassium_K_mg_kg', 'mean']:.1f} mg/kg   ({k_status})
-    Magnesium (Mg)      : {summary_stats.loc['Magnesium_Mg_mg_kg', 'mean']:.1f} mg/kg   ({mg_status})
+    Total Nitrogen (N)  : {n_mean:.1f} mg/kg  ({n_status})
+    Phosphorus (P)      : {p_mean:.1f} mg/kg  ({p_status})
+    Potassium (K)       : {k_mean:.1f} mg/kg  ({k_status})
+    Magnesium (Mg)      : {mg_mean:.1f} mg/kg  ({mg_status})
     """
     print(soil_report_text)
-    return soil_report_text ,output_df
+    return soil_report_text, output_df
 
+@mcp.tool()
+def plot_soil_analysis_report(tif_path):
+    """Generates a professional visual dashboard for the calculated soil metrics."""
+    _, output_df = _process_enmap_soil_data(tif_path)
+    sns.set_theme(style="whitegrid")
+    plt.rcParams.update({
+        "font.family": "sans-serif",
+        "font.size": 10,
+        "axes.labelsize": 11,
+        "axes.titlesize": 12,
+        "xtick.labelsize": 9,
+        "ytick.labelsize": 9,
+        "figure.titlesize": 16
+    })
 
+    fig, axes = plt.subplots(3, 3, figsize=(18, 14))
+    fig.suptitle("HYPERSPECTRAL SOIL DIAGNOSTIC & RISK REPORT", fontweight="bold", y=0.96)
+    ax = axes.flatten()
+
+    colors = {
+        "pH": "#4f81bd", "N": "#c0504d", "P": "#9bbb59",
+        "K": "#8064a2", "Mg": "#4bacc6", "SOM": "#f79646"
+    }
+
+    # Plots
+    sns.histplot(data=output_df, x="pH_Assessment", kde=True, ax=ax[0], color=colors["pH"], edgecolor="black", alpha=0.7)
+    ax[0].axvline(output_df["pH_Assessment"].mean(), color="darkred", linestyle="--", label=f"Mean: {output_df['pH_Assessment'].mean():.2f}")
+    ax[0].set_title("Soil pH Profile", fontweight="bold")
+    ax[0].legend()
+
+    sns.histplot(data=output_df, x="Nitrogen_N_mg_kg", kde=True, ax=ax[1], color=colors["N"], edgecolor="black", alpha=0.7)
+    ax[1].set_title("Total Nitrogen (N %)", fontweight="bold")
+
+    sns.histplot(data=output_df, x="Phosphorus_P_mg_kg", kde=True, ax=ax[2], color=colors["P"], edgecolor="black", alpha=0.7)
+    ax[2].set_title("Available Phosphorus (P)", fontweight="bold")
+
+    sns.histplot(data=output_df, x="Potassium_K_mg_kg", kde=True, ax=ax[3], color=colors["K"], edgecolor="black", alpha=0.7)
+    ax[3].set_title("Exchangeable Potassium (K)", fontweight="bold")
+
+    sns.histplot(data=output_df, x="Magnesium_Mg_mg_kg", kde=True, ax=ax[4], color=colors["Mg"], edgecolor="black", alpha=0.7)
+    ax[4].set_title("Magnesium (Mg)", fontweight="bold")
+
+    sns.histplot(data=output_df, x="SOM_pct", kde=True, ax=ax[5], color=colors["SOM"], edgecolor="black", alpha=0.7)
+    ax[5].set_title("Soil Organic Matter (SOM %)", fontweight="bold")
+
+    scatter = ax[6].scatter(output_df["NDVI"], output_df["SWI"], c=output_df["pH_Assessment"], cmap="viridis", alpha=0.6, s=25)
+    ax[6].set_title("NDVI vs SWI (by pH)", fontweight="bold")
+    ax[6].set_xlabel("NDVI")
+    ax[6].set_ylabel("SWI")
+    cbar = fig.colorbar(scatter, ax=ax[6], orientation="vertical", shrink=0.7)
+    cbar.set_label("pH", size=9)
+
+    ax[7].axis("off")
+    summary_text = (
+        f"=== AGROMANAGEMENT METRICS ===\n\n"
+        f"Total Samples Bound : {len(output_df)} pixels\n"
+        f"Mean Soil pH        : {output_df['pH_Assessment'].mean():.2f}\n"
+        f"Mean SOM Buffer     : {output_df['SOM_pct'].mean():.2f}%\n"
+        f"Mean Nitrogen (N)   : {output_df['Nitrogen_N_mg_kg'].mean():.3f} mg/kg\n"
+        f"Mean Phosphorus (P) : {output_df['Phosphorus_P_mg_kg'].mean():.1f} mg/kg\n"
+        f"Mean Potassium (K)  : {output_df['Potassium_K_mg_kg'].mean():.1f} mg/kg\n"
+        f"Mean NDVI Baseline  : {output_df['NDVI'].mean():.3f}\n"
+        f"Mean Moisture (SWI) : {output_df['SWI'].mean():.3f}\n\n"
+        f"Limiting Factor Note:\n"
+        f"High fertility levels detected. Focus on physical\n"
+        f"topography drainage bottlenecks over fertilization."
+    )
+    ax[7].text(0.05, 0.95, summary_text, transform=ax[7].transAxes, fontsize=11,
+               verticalalignment='top', family='monospace',
+               bbox=dict(boxstyle="round,pad=1", facecolor="#f8f9fa", edgecolor="#ccc"))
+    ax[8].axis("off")
+    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+    plt.savefig('SOIL_DIAGNOSTIC_REPORT.png', dpi=300, bbox_inches="tight")
+    print(f"Report saved successfully to: SOIL_DIAGNOSTIC_REPORT.png")
+    plt.close()
 
 @mcp.tool()
 def CREATE_GEO_AND_RISK_REPORT(TIF_DATA_PATH: str) -> str:

@@ -15,3 +15,4 @@ shapely
 osmnx
 pysheds
 bmi_topography
+seaborn
