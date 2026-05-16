@@ -153,7 +153,8 @@ function renderFigures(result) {
   if (!output) return;
 
   const metrics = extractMetrics(result?.content || "");
-  if (!metrics.length) {
+  const plots = extractPlotOutputs(result);
+  if (!metrics.length && !plots.length) {
     output.classList.add("hidden");
     output.innerHTML = "";
     return;
@@ -165,7 +166,63 @@ function renderFigures(result) {
     ["Uniformity", "uniformity"],
   ];
   output.classList.remove("hidden");
-  output.innerHTML = rows.map(([title, key]) => figureCard(title, metrics, key)).join("");
+  output.innerHTML = [
+    ...plots.map(plotCard),
+    ...rows.map(([title, key]) => figureCard(title, metrics, key)),
+  ].join("");
+}
+
+function extractPlotOutputs(result) {
+  const plots = [];
+  const seen = new Set();
+
+  function addPlot(item) {
+    if (!item || item.success === false || !item.relative_path) return;
+    const path = String(item.relative_path);
+    if (seen.has(path)) return;
+    seen.add(path);
+    plots.push({
+      path,
+      title: item.plot_name || item.title || path.split("/").pop(),
+      type: item.chart_type || path.split(".").pop(),
+    });
+  }
+
+  function visit(value) {
+    if (!value || typeof value !== "object") return;
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+      return;
+    }
+    addPlot(value);
+    if (Array.isArray(value.plots)) value.plots.forEach(visit);
+  }
+
+  for (const step of result?.trace || []) {
+    const preview = step.result_preview;
+    if (!preview) continue;
+    try {
+      visit(JSON.parse(preview));
+    } catch {
+      // Non-JSON tool previews are ignored by the figure renderer.
+    }
+  }
+
+  return plots;
+}
+
+function plotCard(plot) {
+  const url = `/api/data?path=${encodeURIComponent(plot.path)}`;
+  const title = String(plot.title || "Plot").replaceAll("_", " ");
+  const isImage = ["svg", "png"].includes(String(plot.type || "").toLowerCase());
+  return `
+    <article class="figure-card plot-card">
+      <h3>${escapeHtml(title)}</h3>
+      ${isImage
+        ? `<img class="plot-image" src="${escapeHtml(url)}" alt="${escapeHtml(title)}">`
+        : `<a class="plot-link" href="${escapeHtml(url)}" target="_blank" rel="noreferrer">${escapeHtml(plot.path)}</a>`}
+    </article>
+  `;
 }
 
 function figureCard(title, metrics, key) {

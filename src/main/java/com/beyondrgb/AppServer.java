@@ -63,6 +63,8 @@ public final class AppServer {
                 sendJson(exchange, 200, statePayload());
             } else if ("GET".equals(method) && "/api/datasets".equals(path)) {
                 sendJson(exchange, 200, Map.of("datasets", listDatasets()));
+            } else if (readPage && "/api/data".equals(path)) {
+                sendDataFile(exchange);
             } else if ("GET".equals(method) && "/api/download".equals(path)) {
                 downloadReport(exchange);
             } else if ("POST".equals(method) && "/api/agent".equals(path)) {
@@ -265,6 +267,29 @@ public final class AppServer {
 
     private Path dataRootPath() {
         return Path.of(stringValue(state.defaults.get("data_root"))).toAbsolutePath().normalize();
+    }
+
+    private void sendDataFile(HttpExchange exchange) throws IOException {
+        String relativePath = queryParam(exchange, "path", "").replace('\\', '/');
+        if (relativePath.isBlank()) {
+            throw new IllegalArgumentException("Missing data file path.");
+        }
+
+        Path dataRoot = dataRootPath();
+        if (!Files.isDirectory(dataRoot)) {
+            Path localData = Path.of("data").toAbsolutePath().normalize();
+            dataRoot = Files.isDirectory(localData) ? localData : dataRoot;
+        }
+        if (!Files.isDirectory(dataRoot)) {
+            throw new IllegalArgumentException("Data root does not exist.");
+        }
+
+        Path root = dataRoot.toAbsolutePath().normalize();
+        Path target = root.resolve(relativePath).normalize();
+        if (!target.startsWith(root)) {
+            throw new IllegalArgumentException("Data file path escapes the data root.");
+        }
+        sendFile(exchange, target);
     }
 
     private void downloadReport(HttpExchange exchange) throws IOException {
@@ -693,6 +718,7 @@ public final class AppServer {
         if (file.endsWith(".js")) return "application/javascript; charset=utf-8";
         if (file.endsWith(".svg")) return "image/svg+xml";
         if (file.endsWith(".png")) return "image/png";
+        if (file.endsWith(".pdf")) return "application/pdf";
         if (file.endsWith(".json")) return "application/json; charset=utf-8";
         return "application/octet-stream";
     }

@@ -384,6 +384,25 @@ textarea:focus {
   font-size: 0.96rem;
 }
 
+.plot-card {
+  grid-column: span 3;
+}
+
+.plot-image {
+  display: block;
+  width: 100%;
+  max-height: 460px;
+  object-fit: contain;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #f8f9fa;
+}
+
+.plot-link {
+  color: var(--accent);
+  overflow-wrap: anywhere;
+}
+
 .bar-list {
   display: grid;
   gap: 10px;
@@ -680,6 +699,10 @@ textarea:focus {
   .figures-grid,
   .action-stack {
     grid-template-columns: 1fr;
+  }
+
+  .plot-card {
+    grid-column: span 1;
   }
 
   .section-head,

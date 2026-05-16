@@ -151,6 +151,21 @@ Bundled tools include:
 - `summarize_csv`
 - `search_text_files`
 - `get_data_root_info`
+- `inspect_geotiff`
+- `analyze_enmap_parcel`
+- `compare_enmap_parcels`
+- `create_parcel_metric_chart`
+- `build_parcel_visualization`
+- `plot_ph_profile`
+- `plot_nitrogen_profile`
+- `plot_phosphorus_profile`
+- `plot_potassium_profile`
+- `plot_magnesium_profile`
+- `plot_som_profile`
+- `plot_ndvi_vs_swi_scatter`
+- `render_agromanagement_textbox`
+- `create_agromanagement_plot_suite`
+- `create_geo_and_risk_report`
 
 Writes are disabled by default. Enable only when needed:
 
