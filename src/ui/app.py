@@ -66,7 +66,7 @@ def _metric_value(value: Any) -> str:
     return str(value)
 
 
-def _render_model_telemetry(telemetry: dict[str, Any] | None, expanded: bool = False) -> None:
+def _render_model_telemetry_details(telemetry: dict[str, Any] | None) -> None:
     if not telemetry:
         return
 
@@ -75,58 +75,114 @@ def _render_model_telemetry(telemetry: dict[str, Any] | None, expanded: bool = F
     rate_headers = latest.get("rate_limit_headers") or {}
     rate_error = latest.get("rate_limit_error") or {}
 
+    top_cols = st.columns(4)
+    top_cols[0].metric("Provider", _metric_value(telemetry.get("provider")))
+    top_cols[1].metric("Model", _metric_value(telemetry.get("model")))
+    top_cols[2].metric("HTTP", _metric_value(latest.get("status_code")))
+    top_cols[3].metric("Calls", _metric_value(len(telemetry.get("calls") or [])))
+
+    if telemetry.get("max_completion_tokens") is not None:
+        st.caption(f"Max completion tokens: `{telemetry['max_completion_tokens']}`")
+
+    if usage:
+        st.markdown("**Token Usage**")
+        usage_cols = st.columns(4)
+        usage_cols[0].metric("Prompt", _metric_value(usage.get("prompt_tokens")))
+        usage_cols[1].metric("Completion", _metric_value(usage.get("completion_tokens")))
+        usage_cols[2].metric("Total", _metric_value(usage.get("total_tokens")))
+        usage_cols[3].metric("Queue time", _metric_value(usage.get("queue_time")))
+
+    if rate_headers:
+        st.markdown("**Rate Limit Headers**")
+        header_cols = st.columns(3)
+        header_cols[0].metric("Token limit", _metric_value(rate_headers.get("x-ratelimit-limit-tokens")))
+        header_cols[1].metric(
+            "Tokens remaining",
+            _metric_value(rate_headers.get("x-ratelimit-remaining-tokens")),
+        )
+        header_cols[2].metric("Token reset", _metric_value(rate_headers.get("x-ratelimit-reset-tokens")))
+
+        request_cols = st.columns(3)
+        request_cols[0].metric(
+            "Request limit",
+            _metric_value(rate_headers.get("x-ratelimit-limit-requests")),
+        )
+        request_cols[1].metric(
+            "Requests remaining",
+            _metric_value(rate_headers.get("x-ratelimit-remaining-requests")),
+        )
+        request_cols[2].metric("Retry after", _metric_value(rate_headers.get("retry-after")))
+
+    if rate_error:
+        st.markdown("**Parsed Rate Limit Error**")
+        error_cols = st.columns(4)
+        error_cols[0].metric("Limit", _metric_value(rate_error.get("limit")))
+        error_cols[1].metric("Used", _metric_value(rate_error.get("used")))
+        error_cols[2].metric("Requested", _metric_value(rate_error.get("requested")))
+        error_cols[3].metric("Retry after", _metric_value(rate_error.get("retry_after")))
+
+    if latest.get("error"):
+        st.error(latest["error"])
+
+    with st.expander("Raw telemetry"):
+        st.json(telemetry)
+
+
+def _render_model_telemetry(telemetry: dict[str, Any] | None, expanded: bool = False) -> None:
+    if not telemetry:
+        return
+
     with st.expander("Model telemetry", expanded=expanded):
-        top_cols = st.columns(4)
-        top_cols[0].metric("Provider", _metric_value(telemetry.get("provider")))
-        top_cols[1].metric("Model", _metric_value(telemetry.get("model")))
-        top_cols[2].metric("HTTP", _metric_value(latest.get("status_code")))
-        top_cols[3].metric("Calls", _metric_value(len(telemetry.get("calls") or [])))
+        _render_model_telemetry_details(telemetry)
 
-        if telemetry.get("max_completion_tokens") is not None:
-            st.caption(f"Max completion tokens: `{telemetry['max_completion_tokens']}`")
 
-        if usage:
-            st.markdown("**Token Usage**")
-            usage_cols = st.columns(4)
-            usage_cols[0].metric("Prompt", _metric_value(usage.get("prompt_tokens")))
-            usage_cols[1].metric("Completion", _metric_value(usage.get("completion_tokens")))
-            usage_cols[2].metric("Total", _metric_value(usage.get("total_tokens")))
-            usage_cols[3].metric("Queue time", _metric_value(usage.get("queue_time")))
+def _last_telemetry() -> dict[str, Any] | None:
+    for telemetry in reversed(st.session_state.telemetry_history):
+        if telemetry:
+            return telemetry
+    return None
 
-        if rate_headers:
-            st.markdown("**Rate Limit Headers**")
-            header_cols = st.columns(3)
-            header_cols[0].metric("Token limit", _metric_value(rate_headers.get("x-ratelimit-limit-tokens")))
-            header_cols[1].metric(
-                "Tokens remaining",
-                _metric_value(rate_headers.get("x-ratelimit-remaining-tokens")),
-            )
-            header_cols[2].metric("Token reset", _metric_value(rate_headers.get("x-ratelimit-reset-tokens")))
 
-            request_cols = st.columns(3)
-            request_cols[0].metric(
-                "Request limit",
-                _metric_value(rate_headers.get("x-ratelimit-limit-requests")),
-            )
-            request_cols[1].metric(
-                "Requests remaining",
-                _metric_value(rate_headers.get("x-ratelimit-remaining-requests")),
-            )
-            request_cols[2].metric("Retry after", _metric_value(rate_headers.get("retry-after")))
+def _render_telemetry_panel() -> None:
+    st.header("Telemetry")
+    telemetry = _last_telemetry()
+    if not telemetry:
+        st.caption("No model telemetry yet. Send a chat message to populate this panel.")
+        return
 
-        if rate_error:
-            st.markdown("**Parsed Rate Limit Error**")
-            error_cols = st.columns(4)
-            error_cols[0].metric("Limit", _metric_value(rate_error.get("limit")))
-            error_cols[1].metric("Used", _metric_value(rate_error.get("used")))
-            error_cols[2].metric("Requested", _metric_value(rate_error.get("requested")))
-            error_cols[3].metric("Retry after", _metric_value(rate_error.get("retry_after")))
+    latest = _latest_call(telemetry)
+    usage = latest.get("usage") or {}
+    rate_headers = latest.get("rate_limit_headers") or {}
+    rate_error = latest.get("rate_limit_error") or {}
 
-        if latest.get("error"):
-            st.error(latest["error"])
+    st.metric("Provider", _metric_value(telemetry.get("provider")))
+    st.caption(f"Model: `{_metric_value(telemetry.get('model'))}`")
+    st.metric("HTTP", _metric_value(latest.get("status_code")))
 
-        with st.expander("Raw telemetry"):
-            st.json(telemetry)
+    if usage:
+        col_a, col_b = st.columns(2)
+        col_a.metric("Prompt", _metric_value(usage.get("prompt_tokens")))
+        col_b.metric("Total", _metric_value(usage.get("total_tokens")))
+
+    if rate_headers:
+        col_a, col_b = st.columns(2)
+        col_a.metric("Token limit", _metric_value(rate_headers.get("x-ratelimit-limit-tokens")))
+        col_b.metric("Remaining", _metric_value(rate_headers.get("x-ratelimit-remaining-tokens")))
+        st.caption(f"Token reset: `{_metric_value(rate_headers.get('x-ratelimit-reset-tokens'))}`")
+
+    if rate_error:
+        st.markdown("**Rate limit error**")
+        col_a, col_b = st.columns(2)
+        col_a.metric("Used", _metric_value(rate_error.get("used")))
+        col_b.metric("Requested", _metric_value(rate_error.get("requested")))
+        st.metric("Limit", _metric_value(rate_error.get("limit")))
+        st.caption(f"Retry after: `{_metric_value(rate_error.get('retry_after'))}`")
+
+    if latest.get("error"):
+        st.error(latest["error"])
+
+    with st.expander("Raw telemetry"):
+        st.json(telemetry)
 
 
 def _render_tool_catalog(tools: list[dict[str, Any]]) -> None:
@@ -229,6 +285,15 @@ if "mcp_tools" not in st.session_state:
 if "show_mcp_tools" not in st.session_state:
     st.session_state.show_mcp_tools = False
 
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
+
+if "trace_history" not in st.session_state:
+    st.session_state.trace_history = []
+
+if "telemetry_history" not in st.session_state:
+    st.session_state.telemetry_history = []
+
 st.title("Welcome to Real Estate Beyond RGB")
 
 with st.sidebar:
@@ -264,15 +329,11 @@ with st.sidebar:
     if st.session_state.show_mcp_tools and st.button("Hide MCP tools", use_container_width=True):
         st.session_state.show_mcp_tools = False
 
+    st.divider()
+    telemetry_panel_slot = st.empty()
+    with telemetry_panel_slot.container():
+        _render_telemetry_panel()
 
-if "chat_history" not in st.session_state:
-    st.session_state.chat_history = []
-
-if "trace_history" not in st.session_state:
-    st.session_state.trace_history = []
-
-if "telemetry_history" not in st.session_state:
-    st.session_state.telemetry_history = []
 
 if st.session_state.show_mcp_tools:
     _render_tool_catalog(st.session_state.mcp_tools)
@@ -321,6 +382,8 @@ if prompt:
                 })
                 st.session_state.trace_history.append(trace)
                 st.session_state.telemetry_history.append(telemetry)
+                with telemetry_panel_slot.container():
+                    _render_telemetry_panel()
             except Exception as exc:
                 error = f"Agent error: `{type(exc).__name__}: {exc}`"
                 st.error(error)
@@ -332,3 +395,5 @@ if prompt:
                     "telemetry": telemetry,
                 })
                 st.session_state.telemetry_history.append(telemetry)
+                with telemetry_panel_slot.container():
+                    _render_telemetry_panel()

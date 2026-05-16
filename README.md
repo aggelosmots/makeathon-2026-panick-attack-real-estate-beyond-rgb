@@ -125,6 +125,8 @@ The sidebar lets you:
 
 The chat box sends prompts to the agent. When the model chooses a tool, the agent calls the MCP server, receives the result, and sends that result back to the model.
 
+The sidebar includes a **Telemetry** panel under the runtime buttons. It always shows the latest model call. Each assistant response also includes a **Model telemetry** expander. These views show provider/model, HTTP status, Groq token usage, rate-limit headers, and parsed rate-limit error fields such as `limit`, `used`, `requested`, and retry timing when Groq returns a rate-limit error.
+
 ## Data Folder
 
 The host path from `HOST_DATA_DIR` is mounted into containers at `CONTAINER_DATA_DIR`.
