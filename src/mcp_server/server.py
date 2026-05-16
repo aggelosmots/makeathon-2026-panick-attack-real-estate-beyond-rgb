@@ -75,6 +75,23 @@ def _resolve_data_path(path_text: str | None) -> Path:
     return _safe_path(raw_path)
 
 
+def _resolve_spectral_tif_path(path_text: str | None) -> Path:
+    target_path = _resolve_data_path(path_text)
+
+    if target_path.is_dir():
+        spectral_candidate = target_path / "SPECTRAL_IMAGE.TIF"
+        if spectral_candidate.exists() and spectral_candidate.is_file():
+            return spectral_candidate
+
+        tif_candidates = sorted(target_path.glob("*.TIF"))
+        if tif_candidates:
+            return tif_candidates[0]
+
+        raise ValueError(f"No GeoTIFF files were found under: {target_path}")
+
+    return target_path
+
+
 def _file_info(path: Path) -> dict[str, Any]:
     stat = path.stat()
     return {
@@ -237,7 +254,7 @@ def _extract_tif_midpoint(tif_path: str) -> dict[str, Any]:
     projected meter coordinates (like Greek EPSG:2100) back to standard Lat/Lon.
     """
     try:
-        file_path = _resolve_data_path(tif_path)
+        file_path = _resolve_spectral_tif_path(tif_path)
         if not file_path.exists():
             return {"success": False, "error": f"GeoTIFF file does not exist: {file_path}"}
         if not file_path.is_file():
@@ -284,95 +301,95 @@ def _bbox_from_point(target_lat: float, target_lon: float, distance_km: float = 
     }
 
 
-def _Flood_risk(target_lat: float, target_lon: float) -> str:
-    bbox = _bbox_from_point(target_lat, target_lon)
-    print("Fetching live Copernicus 30m DEM from OpenTopography API...")
+# def _Flood_risk(target_lat: float, target_lon: float) -> str:
+#     bbox = _bbox_from_point(target_lat, target_lon)
+#     print("Fetching live Copernicus 30m DEM from OpenTopography API...")
 
-    topo = Topography(
-        dem_type="COP30",
-        output_format="GTiff",
-        south=bbox["south"],
-        north=bbox["north"],
-        west=bbox["west"],
-        east=bbox["east"]
-    )
+#     topo = Topography(
+#         dem_type="COP30",
+#         output_format="GTiff",
+#         south=bbox["south"],
+#         north=bbox["north"],
+#         west=bbox["west"],
+#         east=bbox["east"]
+#     )
 
-    da = topo.load()
-    tif_filename = "temp_greece_dem.tif"
-    da.rio.to_raster(tif_filename)
+#     da = topo.load()
+#     tif_filename = "temp_greece_dem.tif"
+#     da.rio.to_raster(tif_filename)
 
-    print("DEM Download Complete. Injecting into Hydrological Pipeline...")
-    grid = Grid.from_raster(tif_filename)
+#     print("DEM Download Complete. Injecting into Hydrological Pipeline...")
+#     grid = Grid.from_raster(tif_filename)
 
-    with rasterio.open(tif_filename) as src:
-        dem_data = src.read(1)
-        row_idx, col_idx = src.index(target_lon, target_lat)
-        target_altitude = dem_data[row_idx, col_idx]
+#     with rasterio.open(tif_filename) as src:
+#         dem_data = src.read(1)
+#         row_idx, col_idx = src.index(target_lon, target_lat)
+#         target_altitude = dem_data[row_idx, col_idx]
         
-        cellsize_x = abs(src.transform[0]) * 111000 * np.cos(np.radians(target_lat))
-        cellsize_y = abs(src.transform[4]) * 111000
+#         cellsize_x = abs(src.transform[0]) * 111000 * np.cos(np.radians(target_lat))
+#         cellsize_y = abs(src.transform[4]) * 111000
 
-        try:
-            z = dem_data[row_idx-1:row_idx+2, col_idx-1:col_idx+2]
-            if z.shape == (3, 3):
-                dz_dx = ((z[0,2] + 2*z[1,2] + z[2,2]) - (z[0,0] + 2*z[1,0] + z[2,0])) / (8 * cellsize_x)
-                dz_dy = ((z[2,0] + 2*z[2,1] + z[2,2]) - (z[0,0] + 2*z[0,1] + z[0,2])) / (8 * cellsize_y)
+#         try:
+#             z = dem_data[row_idx-1:row_idx+2, col_idx-1:col_idx+2]
+#             if z.shape == (3, 3):
+#                 dz_dx = ((z[0,2] + 2*z[1,2] + z[2,2]) - (z[0,0] + 2*z[1,0] + z[2,0])) / (8 * cellsize_x)
+#                 dz_dy = ((z[2,0] + 2*z[2,1] + z[2,2]) - (z[0,0] + 2*z[0,1] + z[0,2])) / (8 * cellsize_y)
                 
-                slope_rise_run = np.sqrt(dz_dx**2 + dz_dy**2)
-                slope_degrees = np.degrees(np.arctan(slope_rise_run))
-                slope_percent = slope_rise_run * 100
-            else:
-                slope_degrees, slope_percent = 0.0, 0.0
-        except IndexError:
-            slope_degrees, slope_percent = 0.0, 0.0
+#                 slope_rise_run = np.sqrt(dz_dx**2 + dz_dy**2)
+#                 slope_degrees = np.degrees(np.arctan(slope_rise_run))
+#                 slope_percent = slope_rise_run * 100
+#             else:
+#                 slope_degrees, slope_percent = 0.0, 0.0
+#         except IndexError:
+#             slope_degrees, slope_percent = 0.0, 0.0
 
-    print("Conditioning surface topography...")
-    dem_raster = grid.read_raster(tif_filename)
-    pit_filled = grid.fill_pits(dem_raster)
-    flooded = grid.fill_depressions(pit_filled)
-    conditioned_dem = grid.resolve_flats(flooded)
+#     print("Conditioning surface topography...")
+#     dem_raster = grid.read_raster(tif_filename)
+#     pit_filled = grid.fill_pits(dem_raster)
+#     flooded = grid.fill_depressions(pit_filled)
+#     conditioned_dem = grid.resolve_flats(flooded)
 
-    print("Computing flow directions (D8 Routing)...")
-    fdir = grid.flowdir(conditioned_dem)
+#     print("Computing flow directions (D8 Routing)...")
+#     fdir = grid.flowdir(conditioned_dem)
 
-    print("Accumulating grid weights...")
-    acc = grid.accumulation(fdir)
+#     print("Accumulating grid weights...")
+#     acc = grid.accumulation(fdir)
 
-    target_acc = acc[row_idx, col_idx]
-    log_target_acc = np.log10(target_acc + 1)
+#     target_acc = acc[row_idx, col_idx]
+#     log_target_acc = np.log10(target_acc + 1)
 
-    print("Analysis successfully calculated!")
+#     print("Analysis successfully calculated!")
 
-    if log_target_acc < 1.5:
-        risk_status = "SAFE"
-        risk_desc = "Low accumulation area. Water sheds away naturally. Safe from water logging."
-    elif 1.5 <= log_target_acc < 3.0:
-        risk_status = "MINOR RISK"
-        risk_desc = "Minor collection channel or secondary swale. Watch for short-term pooling during storms."
-    else:
-        risk_status = "HIGH RISK"
-        risk_desc = "Critical accumulation line or terrain sink. Severe risk of pooling, soil anoxia, and flash flow."
+#     if log_target_acc < 1.5:
+#         risk_status = "SAFE"
+#         risk_desc = "Low accumulation area. Water sheds away naturally. Safe from water logging."
+#     elif 1.5 <= log_target_acc < 3.0:
+#         risk_status = "MINOR RISK"
+#         risk_desc = "Minor collection channel or secondary swale. Watch for short-term pooling during storms."
+#     else:
+#         risk_status = "HIGH RISK"
+#         risk_desc = "Critical accumulation line or terrain sink. Severe risk of pooling, soil anoxia, and flash flow."
 
-    if slope_degrees > 5.0:
-        slope_desc = "Steep terrain. High risk of soil erosion, nutrient washing, and rapid runoff velocity."
-    elif 2.0 <= slope_degrees <= 5.0:
-        slope_desc = "Moderate slope. Good drainage balance; minimal erosion concern under normal conditions."
-    else:
-        slope_desc = "Flat plain topography. Water moves slowly, maximizing infiltration but increasing pooling vulnerability."
+#     if slope_degrees > 5.0:
+#         slope_desc = "Steep terrain. High risk of soil erosion, nutrient washing, and rapid runoff velocity."
+#     elif 2.0 <= slope_degrees <= 5.0:
+#         slope_desc = "Moderate slope. Good drainage balance; minimal erosion concern under normal conditions."
+#     else:
+#         slope_desc = "Flat plain topography. Water moves slowly, maximizing infiltration but increasing pooling vulnerability."
 
-    report_text = f"""
-    [LOCATION INFORMATION]            
-    Target Coordinates : Lat {target_lat:.5f}, Lon {target_lon:.5f}
-    Local Elevation    : {target_altitude:.2f} meters above sea level
-    Surface Steepness  : {slope_degrees:.2f}[degrees] ({slope_percent:.1f}% grade)
-    Terrain Profile    : {slope_desc}
-    [FLOOD RISK ASSESSMENT REPORT]            
-    RAW FLOW ACCUM.    : {int(target_acc)} upstream contributing cells
-    OVERALL RISK LEVEL : {risk_status}
-    Risk Assessment    : {risk_desc}
-    """
-    print(report_text)
-    return report_text
+#     report_text = f"""
+#     [LOCATION INFORMATION]            
+#     Target Coordinates : Lat {target_lat:.5f}, Lon {target_lon:.5f}
+#     Local Elevation    : {target_altitude:.2f} meters above sea level
+#     Surface Steepness  : {slope_degrees:.2f}[degrees] ({slope_percent:.1f}% grade)
+#     Terrain Profile    : {slope_desc}
+#     [FLOOD RISK ASSESSMENT REPORT]            
+#     RAW FLOW ACCUM.    : {int(target_acc)} upstream contributing cells
+#     OVERALL RISK LEVEL : {risk_status}
+#     Risk Assessment    : {risk_desc}
+#     """
+#     print(report_text)
+#     return report_text
 
 
 def _calculate_road_proximity(target_lat: float, target_lon: float) -> str:
@@ -410,9 +427,29 @@ def _calculate_road_proximity(target_lat: float, target_lon: float) -> str:
 
 
 def _process_enmap_soil_data(input_file: str) -> str:
-    file_path = _resolve_data_path(input_file)
+    file_path = _resolve_spectral_tif_path(input_file)
     print(f"Loading hyperspectral dataset: {file_path}...")
-    df = pd.read_csv(file_path)
+
+    if file_path.suffix.lower() == ".csv":
+        df = pd.read_csv(file_path)
+    else:
+        with rasterio.open(file_path) as src:
+            cube = src.read().astype(np.float32)
+            nodata = src.nodata
+
+        if nodata is not None:
+            cube[cube == nodata] = np.nan
+
+        pixel_matrix = cube.reshape(cube.shape[0], -1).T
+        valid_mask = ~np.all(np.isnan(pixel_matrix), axis=1)
+        pixel_matrix = pixel_matrix[valid_mask]
+
+        if pixel_matrix.size == 0:
+            raise ValueError(f"No valid hyperspectral pixels found in {file_path.name}")
+
+        band_columns = [f"Band_{index}" for index in range(1, pixel_matrix.shape[1] + 1)]
+        df = pd.DataFrame(pixel_matrix, columns=band_columns)
+        df.insert(0, "Pixel_ID", np.arange(1, len(df) + 1))
     
     band_cols = [col for col in df.columns if col.startswith('Band_')]
     print(f"Detected {len(band_cols)} spectral bands. Interpoloating atmospheric gaps...")
@@ -497,7 +534,7 @@ def _process_enmap_soil_data(input_file: str) -> str:
 
 @mcp.tool()
 def CREATE_GEO_AND_RISK_REPORT(TIF_DATA_PATH: str) -> str:
-    """Generate a comprehensive geo-spatial and risk report based on the provided GeoTIFF file."""
+    """Generate a comprehensive geo-spatial and risk report from an EnMap folder or spectral GeoTIFF."""
     midpoint_info = _extract_tif_midpoint(TIF_DATA_PATH)
     if not midpoint_info.get("success"):
         return f"GeoTIFF midpoint extraction failed: {midpoint_info.get('error', 'unknown error')}"
@@ -507,7 +544,7 @@ def CREATE_GEO_AND_RISK_REPORT(TIF_DATA_PATH: str) -> str:
 
     print(f"Extracted midpoint coordinates from GeoTIFF: Latitude {target_lat}, Longitude {target_lon}")
     report = ''
-    report += _Flood_risk(target_lat, target_lon)
+    # report += _Flood_risk(target_lat, target_lon)
     report += _calculate_road_proximity(target_lat, target_lon)
     report += _process_enmap_soil_data(TIF_DATA_PATH)
 

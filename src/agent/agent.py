@@ -24,9 +24,24 @@ AGENT_MAX_STEPS = env_int("AGENT_MAX_STEPS", 6)
 ###
 ###         WE NEED TO CREATE THE AGENT PROMPT
 SYSTEM_PROMPT = """You are an expert AI Real Estate and Agricultural Investment Analyst.
-Your goal is to evaluate four ~250,000 m² land crop areas (priced at ~1M Euro each) and recommend the best investment.
-You have access to MCP tools that can analyze EnMap hyperspectral satellite data. 
-Compare the parcels using spectral indices (like NDVI, NDWI), environmental data, and explain your data-driven methodology clearly.
+Your goal is to compare four land crop areas of about 250,000 m² each, priced at roughly 1 million euros, and identify the best investment opportunity.
+You have access to MCP tools that inspect EnMap hyperspectral satellite data and related local files.
+
+Always work from the available data first. Read, compare, and synthesize the four parcel datasets before reaching a conclusion.
+Use spectral, environmental, topographic, and any other relevant evidence available through the tools.
+Never invent tool failures, API limitations, pricing limits, missing files, or access restrictions.
+Only mention a tool failure if it appears in the actual tool result, and then report the exact tool name and exact error.
+Do not narrate future tool usage such as "I will list files" or "next I will analyze".
+Do not include raw tool call syntax such as `list_data_files(...)` in the final answer.
+
+Respond with a concise investment report using this structure:
+1. Executive summary
+2. Parcel comparison
+3. Best investment recommendation
+4. Evidence and methodology
+5. Risks or missing information
+
+Keep the report compact, analytical, and decision-oriented.
 """
 
 class ModelAPIError(RuntimeError):
@@ -183,6 +198,46 @@ def _parse_tool_arguments(arguments: Any) -> dict[str, Any]:
             return {}
         return parsed if isinstance(parsed, dict) else {}
     return {}
+
+
+def _tool_failures(trace: list[dict[str, Any]]) -> list[dict[str, str]]:
+    failures: list[dict[str, str]] = []
+    for step in trace:
+        preview = str(step.get("result_preview") or "")
+        if preview.startswith("Tool error:"):
+            failures.append({
+                "tool": str(step.get("tool") or "unknown"),
+                "error": preview.removeprefix("Tool error: ").strip(),
+            })
+    return failures
+
+
+def _sanitize_answer(answer: str, trace: list[dict[str, Any]]) -> str:
+    cleaned_lines: list[str] = []
+    raw_tool_call_pattern = re.compile(r"^\s*[A-Za-z_][A-Za-z0-9_]*\([^)]*\)\s*$")
+    planning_pattern = re.compile(r"^\s*(i will|i'll|let me|first[, ]+i|next[, ]+i)\b", flags=re.IGNORECASE)
+
+    for line in answer.splitlines():
+        stripped = line.strip()
+        if raw_tool_call_pattern.match(stripped):
+            continue
+        if planning_pattern.match(stripped):
+            continue
+        cleaned_lines.append(line)
+
+    cleaned = "\n".join(cleaned_lines).strip()
+    if not cleaned:
+        cleaned = "The analysis completed, but the model did not return a stable report."
+
+    failures = _tool_failures(trace)
+    if failures:
+        notes = "\n".join(f"- `{item['tool']}` failed: {item['error']}" for item in failures[:3])
+        if "Risks or missing information" in cleaned:
+            cleaned = f"{cleaned}\n{notes}"
+        else:
+            cleaned = f"{cleaned}\n\n5. Risks or missing information\n{notes}"
+
+    return cleaned
 
 
 def _clean_openai_tool_call(call: Any) -> dict[str, Any]:
@@ -363,8 +418,9 @@ async def _run_huggingface_agent(
 
             tool_calls = assistant_message.get("tool_calls") or []
             if not tool_calls:
+                answer = _sanitize_answer(assistant_message.get("content", ""), trace)
                 return {
-                    "answer": assistant_message.get("content", ""),
+                    "answer": answer,
                     "trace": trace,
                     "messages": messages,
                     "telemetry": telemetry,
