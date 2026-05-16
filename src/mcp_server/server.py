@@ -23,7 +23,6 @@ from rasterio.crs import CRS
 from shapely.geometry import Point
 import seaborn as sns
 from src.common_config import DATA_ROOT, env_bool, env_int, env_str
-
 MCP_HOST = env_str("MCP_HOST", "0.0.0.0")
 MCP_PORT = env_int("MCP_PORT", 8000)
 ALLOW_WRITE_TO_DATA = env_bool("ALLOW_WRITE_TO_DATA", False)
@@ -609,10 +608,7 @@ def _process_enmap_soil_data(input_file: str) -> tuple[str, pd.DataFrame]:
     print(soil_report_text)
     return soil_report_text, output_df
 
-import os
-import matplotlib.pyplot as plt
-import seaborn as sns
-import pandas as pd
+
 
 def _apply_global_plot_styles():
     """Helper to enforce clean, publication-ready styling across plots."""
