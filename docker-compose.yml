@@ -20,7 +20,7 @@ services:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
-    command: streamlit run src/ui/app.py --server.address=0.0.0.0 --server.port=8501
+    command: java -cp /app/build/classes com.beyondrgb.AppServer
     depends_on:
       - mcp-tools
     environment:
@@ -32,6 +32,7 @@ services:
       MCP_SERVER_URL: http://mcp-tools:8000/mcp
       DATA_ROOT: ${CONTAINER_DATA_DIR:-/workspace/data}
       AGENT_MAX_STEPS: ${AGENT_MAX_STEPS:-6}
+      UI_INTERNAL_PORT: 8501
     volumes:
       - ${HOST_DATA_DIR:-./data}:${CONTAINER_DATA_DIR:-/workspace/data}
     ports:

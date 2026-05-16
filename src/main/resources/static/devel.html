@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Developer Console</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body data-page="developer">
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="Real Estate Beyond RGB home">
+      <span class="brand-mark">DEV</span>
+      <span>
+        <strong>Developer Console</strong>
+        <small>Runtime controls, telemetry, tools, and system state</small>
+      </span>
+    </a>
+    <nav class="topnav" aria-label="Primary navigation">
+      <a href="/">Analysis</a>
+      <a class="active" href="/devel">Developer</a>
+    </nav>
+  </header>
+
+  <main class="workspace developer-grid">
+    <section class="overview-panel">
+      <div class="section-head">
+        <div>
+          <p class="eyebrow">Workspace</p>
+          <h1>User View</h1>
+        </div>
+      </div>
+      <dl class="detail-list">
+        <div><dt>Public route</dt><dd>/</dd></div>
+        <div><dt>Developer route</dt><dd>/devel</dd></div>
+        <div><dt>Messages</dt><dd data-count="messages">0</dd></div>
+        <div><dt>Telemetry snapshots</dt><dd data-count="telemetry">0</dd></div>
+      </dl>
+      <h2>Latest result preview</h2>
+      <pre id="latest-preview" class="code-block">No result yet.</pre>
+    </section>
+
+    <section class="settings-panel">
+      <div class="section-head">
+        <div>
+          <p class="eyebrow">Runtime</p>
+          <h1>Settings</h1>
+        </div>
+        <button id="save-settings" class="button primary" type="button">Save</button>
+      </div>
+      <form id="settings-form" class="settings-form">
+        <label>
+          Provider
+          <select id="provider-field" name="provider">
+            <option value="huggingface">huggingface</option>
+          </select>
+        </label>
+        <label>
+          Model
+          <input id="model-field" name="model" type="text">
+        </label>
+        <label>
+          Max tool-call steps
+          <input id="max-steps-field" name="max_steps" type="number" min="1" max="20">
+        </label>
+        <label class="wide">
+          System prompt
+          <textarea id="system-prompt-field" name="system_prompt" rows="11"></textarea>
+        </label>
+      </form>
+    </section>
+
+    <section class="console-panel">
+      <div class="tabs" role="tablist" aria-label="Developer sections">
+        <button class="tab active" type="button" data-tab="telemetry">Telemetry</button>
+        <button class="tab" type="button" data-tab="tools">MCP Tools</button>
+        <button class="tab" type="button" data-tab="system">System</button>
+      </div>
+
+      <div class="tab-panel" data-panel="telemetry">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Model Calls</p>
+            <h2>Telemetry</h2>
+          </div>
+        </div>
+        <div id="telemetry-output" class="telemetry-grid"></div>
+        <details class="raw-details">
+          <summary>Raw telemetry</summary>
+          <pre id="raw-telemetry" class="code-block">No telemetry yet.</pre>
+        </details>
+      </div>
+
+      <div class="tab-panel hidden" data-panel="tools">
+        <div class="toolbar">
+          <button id="refresh-tools" class="button" type="button">Refresh MCP tools</button>
+          <button id="refresh-models" class="button" type="button">Show provider models</button>
+        </div>
+        <div id="models-output" class="model-list"></div>
+        <div id="tools-output" class="tool-grid"></div>
+      </div>
+
+      <div class="tab-panel hidden" data-panel="system">
+        <div class="system-layout">
+          <section>
+            <div class="section-head">
+              <div>
+                <p class="eyebrow">System Runtime</p>
+                <h2>Environment</h2>
+              </div>
+            </div>
+            <dl id="runtime-summary" class="detail-list"></dl>
+          </section>
+          <section>
+            <div class="section-head">
+              <div>
+                <p class="eyebrow">Management</p>
+                <h2>Actions</h2>
+              </div>
+            </div>
+            <div class="action-stack">
+              <button class="button" type="button" data-system-action="clear_conversation">Clear conversation</button>
+              <button class="button" type="button" data-system-action="clear_telemetry">Clear telemetry</button>
+              <button class="button" type="button" data-system-action="clear_tool_cache">Clear tool cache</button>
+              <button class="button danger" type="button" data-system-action="reset_settings">Reset developer settings</button>
+            </div>
+          </section>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+</body>
+</html>

@@ -12,8 +12,8 @@ host ./data
    | mounted as /workspace/data
    v
 agent-ui  <---- MCP Streamable HTTP ---->  mcp-tools
-Streamlit                               data tools
-model agent
+Java HTTP server + HTML/CSS/JS         data tools
+Python model agent bridge
    |
    | OpenAI-compatible chat/tool API
    v
@@ -31,7 +31,7 @@ Hugging Face hosted inference
 1. Create your environment file:
 
 ```bash
-cp .env.example .env
+cp env.example .env
 ```
 
 2. Edit `.env` and set your Hugging Face token.
@@ -70,7 +70,7 @@ Search the data folder for testing.
 
 ## Services
 
-- `agent-ui`: Streamlit web UI and agent loop.
+- `agent-ui`: Java HTTP server serving the HTML/CSS/JavaScript UI and JSON API. It calls the Python agent bridge for model/tool execution.
 - `mcp-tools`: MCP Streamable HTTP server exposing file/data tools.
 
 Check status:
@@ -116,16 +116,21 @@ Hugging Face's OpenAI-compatible router uses `https://router.huggingface.co/v1`.
 
 ## UI Usage
 
-The sidebar lets you:
+The public Java web application at `http://localhost:8501` lets you:
 
-- Change the model name.
-- Change max tool-call steps.
+- Send an investment-analysis prompt to the agent.
+- Review the condensed report returned by the model.
+- Inspect the tool-call activity behind the analysis.
+
+The developer console at `http://localhost:8501/devel` lets you:
+
+- Change the model name, max tool-call steps, and system prompt.
 - Show provider models.
 - Show MCP tools as visual cards.
+- Inspect telemetry for the latest model call.
+- Clear conversation, telemetry, and cached tool/model data.
 
-The chat box sends prompts to the agent. When the model chooses a tool, the agent calls the MCP server, receives the result, and sends that result back to the model.
-
-The sidebar includes a **Telemetry** panel under the runtime buttons. It always shows the latest model call. Each assistant response also includes a **Model telemetry** expander. These views show provider/model, HTTP status, token usage when returned by the provider, rate-limit headers, and parsed rate-limit error fields such as `limit`, `used`, `requested`, and retry timing.
+The prompt form sends requests to the Java API. The Java backend calls the Python agent bridge, and when the model chooses a tool, the agent calls the MCP server, receives the result, and sends that result back to the model.
 
 ## Data Folder
 
@@ -243,7 +248,8 @@ docker compose exec mcp-tools ls -la /workspace/data
 Run syntax checks:
 
 ```bash
-python -m py_compile src/agent/agent.py src/ui/app.py src/mcp_server/server.py src/common_config.py
+python -m py_compile src/agent/agent.py src/agent/bridge.py src/mcp_server/server.py src/common_config.py
+javac -d build/classes $(find src/main/java -name "*.java")
 ```
 
 Rebuild after code changes:
