@@ -691,6 +691,8 @@ public final class AppServer {
         if (file.endsWith(".html")) return "text/html; charset=utf-8";
         if (file.endsWith(".css")) return "text/css; charset=utf-8";
         if (file.endsWith(".js")) return "application/javascript; charset=utf-8";
+        if (file.endsWith(".svg")) return "image/svg+xml";
+        if (file.endsWith(".png")) return "image/png";
         if (file.endsWith(".json")) return "application/json; charset=utf-8";
         return "application/octet-stream";
     }

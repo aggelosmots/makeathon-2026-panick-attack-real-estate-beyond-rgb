@@ -77,6 +77,17 @@ a {
   font-weight: 800;
 }
 
+.brand-logo {
+  width: 48px;
+  height: 48px;
+  border: 1px solid #2d4658;
+  border-radius: 10px;
+  background: #f7fbfb;
+  object-fit: cover;
+  object-position: top center;
+  padding: 0;
+}
+
 .brand strong,
 .brand small {
   display: block;
@@ -118,7 +129,9 @@ a {
 }
 
 .workspace {
-  width: min(1180px, calc(100vw - 36px));
+  width: 80vw;
+  min-width: min(80vw, 760px);
+  max-width: 80vw;
   margin: 18px auto 56px;
 }
 
