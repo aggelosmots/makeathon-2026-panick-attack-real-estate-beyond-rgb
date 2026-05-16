@@ -622,6 +622,24 @@ def _apply_global_plot_styles():
         "ytick.labelsize": 9,
         "figure.titlesize": 16
     })
+
+@mcp.tool()
+def plot_area_spectral_signature(tif_path: str):
+    """Plots the average spectral signature across all pixels in the TIF."""
+    df = _tif_to_dataframe(tif_path)
+    band_cols = [col for col in df.columns if col.startswith('Band_')]
+    
+    mean_spectrum = df[band_cols].mean()
+    
+    plt.figure(figsize=(10, 4))
+    sns.lineplot(x=range(1, len(band_cols) + 1), y=mean_spectrum.values, marker="o")
+    plt.title("Average Spectral Signature Across Area", fontweight="bold")
+    plt.xlabel("Spectral Band")
+    plt.ylabel("Mean Reflectance (Scaled)")
+    plt.xticks(ticks=range(1, len(band_cols) + 1), labels=band_cols, rotation=45)
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
 @mcp.tool()
 def plot_ph_profile(tif_path: str, ax: plt.Axes = None, color: str = "#4f81bd"):
     """Plots the distribution and average marker of soil pH directly from TIF path."""
