@@ -473,6 +473,28 @@ def _process_enmap_soil_data(input_file: str) -> str:
     else:
         som_status = "Low Organic Buffer"
 
+    if Nitrogen_N_pct := summary_stats.loc['Nitrogen_N_pct', 'mean'] < 0.15:
+        n_status = "Deficient"
+    else:
+        n_status = "Sufficient"
+
+    if Phosphorus_P_mg_kg := summary_stats.loc['Phosphorus_P_mg_kg', 'mean'] < 15:
+        p_status = " Deficient"
+    else:
+        p_status = "Sufficient"
+
+    if Potassium_K_mg_kg := summary_stats.loc['Potassium_K_mg_kg', 'mean'] < 100:
+        k_status = " Deficient"
+    else:
+        k_status = "Sufficient"
+
+    if Magnesium_Mg_mg_kg := summary_stats.loc['Magnesium_Mg_mg_kg', 'mean'] < 100:
+        mg_status = " Deficient"
+    else:
+        mg_status = "Sufficient"
+
+
+
     soil_report_text = f"""
     [CHEMICAL CHARACTERISTICS]
     Soil pH Profile     : {ph_mean:.2f} ({ph_status})  [Range: {summary_stats.loc['pH_Assessment', 'min']:.2f} - {summary_stats.loc['pH_Assessment', 'max']:.2f}]
@@ -482,17 +504,13 @@ def _process_enmap_soil_data(input_file: str) -> str:
     Soil Organic Carbon : 2.48%
     Hydrological Note   : High SOM improves crop resilience but prolongs drying periods post-flood.
     [MACRONUTRIENT RESERVES ANALYSIS]
-    Total Nitrogen (N)  : {summary_stats.loc['Nitrogen_N_pct', 'mean']:.3f}%       -> Status: Highly Sufficient baseline reserves.
-    Phosphorus (P)      : {summary_stats.loc['Phosphorus_P_mg_kg', 'mean']:.2f} mg/kg   -> Status: Optimum availability; low fertilizer demand.
-    Potassium (K)       : {summary_stats.loc['Potassium_K_mg_kg', 'mean']:.1f} mg/kg   -> Status: Extremely Abundant; clay matrix fully charged.
-    Magnesium (Mg)      : {summary_stats.loc['Magnesium_Mg_mg_kg', 'mean']:.1f} mg/kg  -> Status: Abundant; structural clay stability high.
-    [MANAGEMENT SUMMARY]
-    Overall Soil Quality: EXCELLENT FERTILITY. The primary yield limiting factor for 
-                        this zone is NOT nutrition; it is physical water management 
-                        and drainage drainage bottlenecks.
+    Total Nitrogen (N)  : {summary_stats.loc['Nitrogen_N_pct', 'mean']:.3f}%  ({n_status})
+    Phosphorus (P)      : {summary_stats.loc['Phosphorus_P_mg_kg', 'mean']:.2f} mg/kg   ({p_status})
+    Potassium (K)       : {summary_stats.loc['Potassium_K_mg_kg', 'mean']:.1f} mg/kg   ({k_status})
+    Magnesium (Mg)      : {summary_stats.loc['Magnesium_Mg_mg_kg', 'mean']:.1f} mg/kg   ({mg_status})
     """
     print(soil_report_text)
-    return soil_report_text
+    return soil_report_text ,output_df
 
 
 @mcp.tool()
@@ -509,10 +527,9 @@ def CREATE_GEO_AND_RISK_REPORT(TIF_DATA_PATH: str) -> str:
     report = ''
     report += _Flood_risk(target_lat, target_lon)
     report += _calculate_road_proximity(target_lat, target_lon)
-    report += _process_enmap_soil_data(TIF_DATA_PATH)
-
+    report_soil, _ = _process_enmap_soil_data(TIF_DATA_PATH)    
+    report += report_soil
     return report.upper()
-
 
 if __name__ == "__main__":
     DATA_ROOT.mkdir(parents=True, exist_ok=True)
