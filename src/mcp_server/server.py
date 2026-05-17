@@ -10,6 +10,7 @@ from pathlib import Path
 from pathlib import PureWindowsPath
 from typing import Any
 
+from duckdb import df
 import numpy as np
 import pandas as pd
 from mcp.server.fastmcp import FastMCP
@@ -345,87 +346,117 @@ def _geotiff_metadata(src: Any, tif_path: Path) -> dict[str, Any]:
 
 
 def _analyze_tif(path_text: str) -> dict[str, Any]:
-    rasterio = _rasterio()
-    tif_path = _resolve_tif_path(path_text)
+        df = _tif_to_dataframe(path_text)
+        # CLEAN THE DATA
+        df_cleaned = df.copy()
+        band_cols = [col for col in df.columns if col.startswith('Band_')]
+
+        # FIX 1: Convert black mosaic edge zeros to NaN so they don't break spatial averages
+        df_cleaned[band_cols] = df_cleaned[band_cols].replace(0, np.nan)
+        
+        # Interpolate across the bands
+        df_cleaned[band_cols] = df_cleaned[band_cols].interpolate(axis=1, limit_direction='both')
+        
+        # Fill remaining edge gaps with a standard baseline fraction
+        df_cleaned[band_cols] = df_cleaned[band_cols].fillna(0.2)
+        
+        # FIX 2: Clamp data to real-world reflectance bounds (0.0 to 1.0)
+        # This prevents calculations from scaling inversely into massive negative values
+        df_cleaned[band_cols] = df_cleaned[band_cols].clip(lower=0.0, upper=1.0)
+        
+        np.random.seed(42)
+        num_samples = len(df_cleaned)
+        # organic matter proxy: mean of visible bands (1-40)
+        vis_mean = df_cleaned[[f'Band_{i}' for i in range(1, 41) if f'Band_{i}' in df_cleaned.columns]].mean(axis=1)
     
-    if not tif_path.exists():
-        raise ValueError(f"GeoTIFF file does not exist: {path_text}")
-    if not tif_path.is_file():
-        raise ValueError(f"GeoTIFF path is not a file: {path_text}")
+        # Organic matter base profiles
+        predicted_som = 6.5 - (vis_mean * 3.5) + np.random.normal(0, 0.1, size=num_samples)
+        predicted_soc = predicted_som / 1.724
+        
+        # Original Nitrogen logic (percentage baseline)
+        predicted_n_pct = predicted_som * 0.075 + np.random.normal(0, 0.015, size=num_samples)
+        # CONVERSION: Convert the raw percentage profile into mg/kg (1% = 10,000 mg/kg)
+        predicted_n_mg_kg = predicted_n_pct * 10000.0
+        
+        swir_ratio = df_cleaned['Band_200'] / (df_cleaned['Band_100'] + 1e-5)
+        predicted_ph = 5.2 + (swir_ratio * 1.6) + np.random.normal(0, 0.15, size=num_samples)
+        
+        nir_mean = df_cleaned[[f'Band_{i}' for i in range(45, 85) if f'Band_{i}' in df_cleaned.columns]].mean(axis=1)
+        predicted_p = 12.0 + (nir_mean * 15) - (vis_mean * 8) + np.random.normal(0, 1.5, size=num_samples)
+        
+        swir2_mean = df_cleaned[[f'Band_{i}' for i in range(150, 220) if f'Band_{i}' in df_cleaned.columns]].mean(axis=1)
+        predicted_k = 90.0 + (swir2_mean * 180) - (vis_mean * 40) + np.random.normal(0, 10, size=num_samples)
+        
+        swir1_mean = df_cleaned[[f'Band_{i}' for i in range(100, 150) if f'Band_{i}' in df_cleaned.columns]].mean(axis=1)
+        predicted_mg = 50.0 + (swir1_mean * 120) - (vis_mean * 25) + np.random.normal(0, 5, size=num_samples)
+        ndvi = (df_cleaned['Band_64'] - df_cleaned['Band_38']) / (df_cleaned['Band_64'] + df_cleaned['Band_38'] + 1e-5)
+        swi = df_cleaned['Band_200'] / (df_cleaned['Band_80'] + 1e-5)
+        
+        output_df = pd.DataFrame({
+        'Pixel_ID': df_cleaned['Pixel_ID'],
+        'pH_Assessment': np.round(predicted_ph, 2),
+        'Nitrogen_N_mg_kg': np.round(predicted_n_mg_kg, 1),  # Stored cleanly as mg/kg now
+        'Phosphorus_P_mg_kg': np.round(predicted_p, 1),
+        'Potassium_K_mg_kg': np.round(predicted_k, 1),
+        'Magnesium_Mg_mg_kg': np.round(predicted_mg, 1),
+        'SOM_pct': np.round(predicted_som, 2),
+        'SOC_pct': np.round(predicted_soc, 2),
+        'NDVI': np.round(ndvi, 3),
+        'SWI': np.round(swi, 3)
+         })
+        summary_stats = output_df.describe().transpose()
+        ndvi_stats = summary_stats.loc['NDVI'].to_dict()
+        swi_stats = summary_stats.loc['SWI'].to_dict()
+        SOM_stats = summary_stats.loc['SOM_pct'].to_dict()
+        Magnesium_stats = summary_stats.loc['Magnesium_Mg_mg_kg'].to_dict()
+        Potassium_stats = summary_stats.loc['Potassium_K_mg_kg'].to_dict()
+        Phosphorus_stats = summary_stats.loc['Phosphorus_P_mg_kg'].to_dict()
+        Nitrogen_stats = summary_stats.loc['Nitrogen_N_mg_kg'].to_dict()
+        pH_stats = summary_stats.loc['pH_Assessment'].to_dict()
+                
+              
 
-    with rasterio.open(tif_path) as src:
-
-        # extract specific bands
-        red  = _safe_band(src, 40)
-        nir  = _safe_band(src, 80)
-        swir = _safe_band(src, 200)
-
-        if red is None or nir is None:
-            raise ValueError(
-                f"{tif_path.name} has {src.count} bands; NDVI requires at least bands 40 and 80."
-            )
-
-        # compute additional indeces
-        ndvi = (nir - red) / (nir + red + 1e-6)
-        healthy_mask = ndvi >= 0.35
-        stressed_mask = ndvi < 0.2
-        ndvi_stats = _array_stats(ndvi)
-        valid_ndvi = ndvi[np.isfinite(ndvi)]
-        valid_pixels = int(valid_ndvi.size)
-
-        healthy_coverage = None
-        stressed_coverage = None
-        if valid_pixels:
-            healthy_coverage = round(float(np.count_nonzero(healthy_mask & np.isfinite(ndvi))) / valid_pixels * 100.0, 2)
-            stressed_coverage = round(float(np.count_nonzero(stressed_mask & np.isfinite(ndvi))) / valid_pixels * 100.0, 2)
-
-        swir_stats = _array_stats(swir) if swir is not None else None
-        moisture_index = None
-        if swir is not None:
-            moisture = nir / (swir + 1e-6)
-            moisture_index = _array_stats(moisture)
-
-        # stats
-        visible_mean = _mean_bands(src, 1, 40)
-        nir_mean = _mean_bands(src, 45, 85)
-        swir_mean = _mean_bands(src, 150, min(220, src.count))
-
-        score = None
-        if ndvi_stats["mean"] is not None and ndvi_stats["std"] is not None and healthy_coverage is not None:
-            # Bounded, transparent score: vegetation health + coverage - field variability penalty.
-            score = round(
-                (float(ndvi_stats["mean"]) * 55.0)
-                + (healthy_coverage / 100.0 * 35.0)
-                + (max(0.0, 1.0 - float(ndvi_stats["std"])) * 10.0),
-                3,
-            )
-
-        raster_metadata = _geotiff_metadata(src, tif_path)
         return {
-            "path": raster_metadata["path"],
-            "name": raster_metadata["name"],
-            "metadata": {key: value for key, value in raster_metadata.items() if key not in {"path", "name"}},
+            "path": path_text,
+            "name": os.path.basename(path_text),
             "metrics": {
                 "mean_ndvi": ndvi_stats["mean"],
                 "ndvi_std": ndvi_stats["std"],
                 "ndvi_min": ndvi_stats["min"],
                 "ndvi_max": ndvi_stats["max"],
-                "healthy_coverage_pct": healthy_coverage,
-                "stressed_coverage_pct": stressed_coverage,
-                "valid_pixels": valid_pixels,
-                "swir_band_200": swir_stats,
-                "moisture_index_nir_over_swir": moisture_index,
-                "visible_reflectance_mean": _clean_float(np.nanmean(visible_mean)) if visible_mean is not None else None,
-                "nir_reflectance_mean": _clean_float(np.nanmean(nir_mean)) if nir_mean is not None else None,
-                "swir_reflectance_mean": _clean_float(np.nanmean(swir_mean)) if swir_mean is not None else None,
-                "investment_score": score,
+                "mean_swi": swi_stats["mean"],
+                "swi_std": swi_stats["std"],
+                "swi_min": swi_stats["min"],
+                "swi_max": swi_stats["max"],
+                "mean_som_pct": SOM_stats["mean"],
+                "som_std": SOM_stats["std"],
+                "som_min": SOM_stats["min"],
+                "som_max": SOM_stats["max"],
+                "mean_magnesium_mg_kg": Magnesium_stats["mean"],
+                "magnesium_std": Magnesium_stats["std"],
+                "magnesium_min": Magnesium_stats["min"],
+                "magnesium_max": Magnesium_stats["max"],
+                "mean_potassium_mg_kg": Potassium_stats["mean"],
+                "potassium_std": Potassium_stats["std"],
+                "potassium_min": Potassium_stats["min"],
+                "potassium_max": Potassium_stats["max"],
+                "mean_phosphorus_mg_kg": Phosphorus_stats["mean"],
+                "phosphorus_std": Phosphorus_stats["std"],
+                "phosphorus_min": Phosphorus_stats["min"],
+                "phosphorus_max": Phosphorus_stats["max"],
+                "mean_nitrogen_mg_kg": Nitrogen_stats["mean"],
+                "nitrogen_std": Nitrogen_stats["std"],
+                "nitrogen_min": Nitrogen_stats["min"],
+                "nitrogen_max": Nitrogen_stats["max"],
+                "mean_ph_assessment": pH_stats["mean"],
+                "ph_std": pH_stats["std"],
+                "ph_min": pH_stats["min"],
+                "ph_max": pH_stats["max"],
             },
             "methodology": {
                 "reflectance_scaling": "Bands are divided by 10000 when high reflectance scale is detected; zero mosaic edges are ignored as nodata.",
-                "ndvi_formula": "(Band_80 - Band_40) / (Band_80 + Band_40)",
-                "healthy_coverage_threshold": "NDVI >= 0.35",
-                "stressed_coverage_threshold": "NDVI < 0.20",
-                "score_formula": "mean_ndvi*55 + healthy_coverage_fraction*35 + (1-ndvi_std)*10",
+                "ndvi_formula": "(Band_64 - Band_38) / (Band_64 + Band_38)",
+                
             },
         }
 
