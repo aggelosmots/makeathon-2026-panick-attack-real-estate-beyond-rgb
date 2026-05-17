@@ -14,7 +14,7 @@ from mcp.client.streamable_http import streamable_http_client
 from src.common_config import DATA_ROOT as CONFIGURED_DATA_ROOT
 from src.common_config import env_int, env_str
 
-### These environment variables can be set in the .env file or in the environment. 
+### These environment variables can be set in the .env file or in the environment.
 ### See .env.example for reference.
 MODEL_PROVIDER  = env_str("MODEL_PROVIDER", "google").strip().lower()
 HF_API_BASE     = env_str("HF_API_BASE", "https://router.huggingface.co/v1").rstrip("/")
@@ -34,9 +34,9 @@ MCP_TOOL_LOG_PATH = DATA_ROOT / "mcp_tool_calls.jsonl"
 
 ###
 ###         WE NEED TO CREATE THE AGENT PROMPT
-SYSTEM_PROMPT = """ You are an Expert Earth Observation Data Analyst and Real Estate Investment Advisor. Your absolute priority is objective accuracy, verifiable truth, and complete transparency. You must evaluate four land crop areas provided 
-of approximately 250,000 m^2 each, priced at roughly 1 million euros each, to identify the safest, highest-yielding investment. 
-You have access to MCP tools that provide features and characterize the datasets. You must execute these tools to extract 
+SYSTEM_PROMPT = """ You are an Expert Earth Observation Data Analyst and Real Estate Investment Advisor. Your absolute priority is objective accuracy, verifiable truth, and complete transparency. You must evaluate four land crop areas provided
+of approximately 250,000 m^2 each, priced at roughly 1 million euros each, to identify the safest, highest-yielding investment.
+You have access to MCP tools that provide features and characterize the datasets. You must execute these tools to extract
 empirical information from which all conclusions are based on.
 
 You are bound by the following absolute constraints:
@@ -84,7 +84,11 @@ Deliver a continuous, jargon-free business report that gives the user the result
 [Explicitly list any data points that could not be verified, or explicitly state "All core metrics successfully verified."]
 
 6. FIGURES
-[For parcel comparison reports, MUST call `create_parcel_metric_chart` when comparison metrics are available, then list the returned saved figure path. For selected parcel figure requests, call the specific plot tool or `create_agromanagement_plot_suite`. Never say no figures are provided just because the user did not name a plot if a comparison chart can be generated from verified MCP results.]
+In order to generate figures, you MUST ONLY USE MCP TOOLS. IF YOU FAIL TO USE MCP TOOLS SHOW AN ERROR
+
+It is mandatory that prior to any assessment you should call first create_geo_and_risk_report tool from the MCP toolset.
+
+YOU MUST WRITE WITHIN DATA ALL THE REPORTS YOU GENERATE INCLUDING THE  ERROR MESSAGES.
 
 Before outputting your response, you must internally evaluate: "Is every statement in my response verifiable, supported by real tool data, free of fabrication? Have I shown how I calculated my numbers?" If not, revise until it is.
 """
@@ -227,7 +231,7 @@ def _response_telemetry(
     payload      : dict[str, Any] | None = None,
     error_message: str | None = None,
 ) -> dict[str, Any]:
-   
+
     telemetry: dict[str, Any] = {
         "provider": provider,
         "model": model,
@@ -446,7 +450,7 @@ def _clean_openai_message(message: Any) -> dict[str, Any]:
 
     role = str(message_dict.get("role") or "user")
     content = message_dict.get("content")
-    
+
     # Start with the original dict to preserve provider extensions
     cleaned = dict(message_dict)
     cleaned["role"] = role
