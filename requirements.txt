@@ -6,3 +6,5 @@ matplotlib
 numpy
 pyproj
 rasterio
+duckdb
+geopandas
