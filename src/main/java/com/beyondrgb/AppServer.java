@@ -27,7 +27,7 @@ import java.util.zip.ZipOutputStream;
 public final class AppServer {
     private static final Path STATIC_DIR = Path.of("src", "main", "resources", "static");
     private static final int PORT = intEnv("UI_INTERNAL_PORT", 8501);
-    private static final List<String> PROVIDERS = List.of("huggingface");
+    private static final List<String> PROVIDERS = List.of("huggingface", "google");
 
     private final Object stateLock = new Object();
     private final RuntimeState state;

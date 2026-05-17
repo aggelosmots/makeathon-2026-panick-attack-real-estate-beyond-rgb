@@ -17,7 +17,7 @@ from src.agent.agent import (
 from src.common_config import DATA_ROOT, env_int, env_str
 
 MAX_STEPS = env_int("AGENT_MAX_STEPS", 20)
-PROVIDERS = ["huggingface"]
+PROVIDERS = ["huggingface", "google"]
 
 
 def _default_provider() -> str:

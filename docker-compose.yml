@@ -24,11 +24,14 @@ services:
     depends_on:
       - mcp-tools
     environment:
-      MODEL_PROVIDER: ${MODEL_PROVIDER:-huggingface}
+      MODEL_PROVIDER: ${MODEL_PROVIDER:-google}
       HF_API_BASE: ${HF_API_BASE:-https://router.huggingface.co/v1}
       HF_TOKEN: ${HF_TOKEN:-}
       HF_MODEL: ${HF_MODEL:-google/gemma-3-27b-it}
       HF_MAX_COMPLETION_TOKENS: ${HF_MAX_COMPLETION_TOKENS:-4096}
+      GOOGLE_API_BASE: ${GOOGLE_API_BASE:-https://generativelanguage.googleapis.com/v1beta/openai}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      GOOGLE_MODEL: ${GOOGLE_MODEL:-gemini-3-flash-preview}
       MCP_SERVER_URL: http://mcp-tools:8000/mcp
       DATA_ROOT: ${CONTAINER_DATA_DIR:-/workspace/data}
       AGENT_MAX_STEPS: ${AGENT_MAX_STEPS:-20}

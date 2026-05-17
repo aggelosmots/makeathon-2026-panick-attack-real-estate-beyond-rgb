@@ -16,10 +16,15 @@ from src.common_config import env_int, env_str
 
 ### These environment variables can be set in the .env file or in the environment. 
 ### See .env.example for reference.
-MODEL_PROVIDER  = env_str("MODEL_PROVIDER", "huggingface").strip().lower()
+MODEL_PROVIDER  = env_str("MODEL_PROVIDER", "google").strip().lower()
 HF_API_BASE     = env_str("HF_API_BASE", "https://router.huggingface.co/v1").rstrip("/")
 HF_TOKEN        = env_str("HF_TOKEN", "")
 HF_MODEL        = env_str("HF_MODEL", "google/gemma-3-27b-it")
+
+GOOGLE_API_BASE  = env_str("GOOGLE_API_BASE", "https://generativelanguage.googleapis.com/v1beta/openai").rstrip("/")
+GOOGLE_API_KEY   = env_str("GOOGLE_API_KEY", "")
+GOOGLE_MODEL     = env_str("GOOGLE_MODEL", "gemini-3-flash-preview")
+
 HF_MAX_COMPLETION_TOKENS = env_int("HF_MAX_COMPLETION_TOKENS", 4096)
 MCP_SERVER_URL  = env_str("MCP_SERVER_URL", "http://localhost:8000/mcp")
 AGENT_MAX_STEPS = env_int("AGENT_MAX_STEPS", 20)
@@ -100,11 +105,12 @@ def _obj_to_dict(obj: Any) -> Any:
     return obj
 
 def default_model_for_provider(provider: str | None = None) -> str:
-    # Note: supported only HF models for this use case, but can be extended to other providers as needed
-    # It was tested with Qrok and local Ollama. 
+    # Note: supported only HF and Google models for this use case
     provider = (provider or MODEL_PROVIDER).strip().lower()
     if provider == "huggingface":
         return HF_MODEL
+    if provider == "google":
+        return GOOGLE_MODEL
     return HF_MODEL
 
 def _mcp_tool_to_openai_schema(tool: Any) -> dict[str, Any]:
@@ -367,6 +373,8 @@ def _looks_incomplete(answer: str) -> bool:
 async def _post_chat_completion(
     client: httpx.AsyncClient,
     headers: dict[str, str],
+    api_base: str,
+    provider: str,
     model: str,
     messages: list[dict[str, Any]],
     telemetry: dict[str, Any],
@@ -387,7 +395,7 @@ async def _post_chat_completion(
         payload["tool_choice"] = tool_choice
 
     response = await client.post(
-        f"{HF_API_BASE}/chat/completions",
+        f"{api_base}/chat/completions",
         headers=headers,
         json=payload,
     )
@@ -395,15 +403,15 @@ async def _post_chat_completion(
         response.raise_for_status()
     except httpx.HTTPStatusError as exc:
         detail = _api_error_message(response)
-        call_telemetry = _response_telemetry("huggingface", model, response, error_message=detail)
+        call_telemetry = _response_telemetry(provider, model, response, error_message=detail)
         telemetry["calls"].append(call_telemetry)
         raise ModelAPIError(
-            f"Hugging Face {error_context} failed for model `{model}`: {detail}",
+            f"{provider.title()} {error_context} failed for model `{model}`: {detail}",
             telemetry,
         ) from exc
 
     response_payload = response.json()
-    telemetry["calls"].append(_response_telemetry("huggingface", model, response, response_payload))
+    telemetry["calls"].append(_response_telemetry(provider, model, response, response_payload))
     choices = response_payload.get("choices") or []
     choice = (choices[0] if choices else {}) or {}
     assistant_message = _clean_openai_message((choice.get("message") if choice else {}) or {})
@@ -415,16 +423,16 @@ def _clean_openai_tool_call(call: Any) -> dict[str, Any]:
     if not isinstance(call_dict, dict):
         return {}
 
+    # Preserve all fields to catch provider extensions like thought_signature
+    cleaned = dict(call_dict)
     fn = _obj_to_dict(call_dict.get("function") or {})
     if not isinstance(fn, dict):
         fn = {}
 
-    cleaned = {
-        "type": call_dict.get("type") or "function",
-        "function": {
-            "name": str(fn.get("name") or ""),
-            "arguments": fn.get("arguments") if isinstance(fn.get("arguments"), str) else json.dumps(fn.get("arguments") or {}),
-        },
+    cleaned["type"] = call_dict.get("type") or "function"
+    cleaned["function"] = {
+        "name": str(fn.get("name") or ""),
+        "arguments": fn.get("arguments") if isinstance(fn.get("arguments"), str) else json.dumps(fn.get("arguments") or {}),
     }
     if call_dict.get("id"):
         cleaned["id"] = str(call_dict["id"])
@@ -438,7 +446,10 @@ def _clean_openai_message(message: Any) -> dict[str, Any]:
 
     role = str(message_dict.get("role") or "user")
     content = message_dict.get("content")
-    cleaned: dict[str, Any] = {"role": role}
+    
+    # Start with the original dict to preserve provider extensions
+    cleaned = dict(message_dict)
+    cleaned["role"] = role
 
     if role in {"system", "developer", "user"}:
         cleaned["content"] = "" if content is None else str(content)
@@ -451,6 +462,8 @@ def _clean_openai_message(message: Any) -> dict[str, Any]:
         ]
         if tool_calls:
             cleaned["tool_calls"] = tool_calls
+        else:
+            cleaned.pop("tool_calls", None)
     elif role == "tool":
         cleaned["content"] = "" if content is None else str(content)
         if message_dict.get("tool_call_id"):
@@ -484,10 +497,19 @@ async def list_huggingface_models() -> list[str]:
     return sorted(str(model.get("id", "")) for model in models if model.get("id"))
 
 
+async def list_google_models() -> list[str]:
+    if not GOOGLE_API_KEY:
+        raise RuntimeError("GOOGLE_API_KEY is not set.")
+    # Return common models and requested one
+    return ["gemini-3-flash-preview", "gemini-3.1-pro-preview", "gemini-3.1-flash-lite", "gemma-4-31b-it"]
+
+
 async def list_provider_models(provider: str | None = None) -> list[str]:
     provider = (provider or MODEL_PROVIDER).strip().lower()
     if provider == "huggingface":
         return await list_huggingface_models()
+    if provider == "google":
+        return await list_google_models()
     raise ValueError(f"Unsupported model provider: {provider}")
 
 
@@ -531,27 +553,30 @@ def _base_messages(
     return messages
 
 
-async def _run_huggingface_agent(
+async def _run_agent_loop(
+    provider: str,
+    api_base: str,
+    api_key: str,
     user_text: str,
     history: list[dict[str, str]] | None,
     model: str,
     max_steps: int,
     system_prompt: str | None = None,
 ) -> dict[str, Any]:
-    if not HF_TOKEN:
-        raise RuntimeError("HF_TOKEN is not set. Create a Hugging Face access token and add it to `.env`.")
+    if not api_key:
+        raise RuntimeError(f"API key for {provider} is not set.")
 
     messages = _base_messages(user_text, history, system_prompt)
     tools = await _get_model_tools()
     trace: list[dict[str, Any]] = []
     telemetry: dict[str, Any] = {
-        "provider": "huggingface",
+        "provider": provider,
         "model": model,
         "max_completion_tokens": HF_MAX_COMPLETION_TOKENS,
         "calls": [],
     }
     headers = {
-        "Authorization": f"Bearer {HF_TOKEN}",
+        "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
 
@@ -562,6 +587,8 @@ async def _run_huggingface_agent(
             choice, assistant_message = await _post_chat_completion(
                 client,
                 headers,
+                api_base,
+                provider,
                 model,
                 messages,
                 telemetry,
@@ -651,6 +678,8 @@ async def _run_huggingface_agent(
             choice, final_assistant_message = await _post_chat_completion(
                 client,
                 headers,
+                api_base,
+                provider,
                 model,
                 final_messages,
                 telemetry,
@@ -699,7 +728,27 @@ async def ask_agent(
     max_steps = max_steps or AGENT_MAX_STEPS
 
     if provider == "huggingface":
-        return await _run_huggingface_agent(user_text, history, model, max_steps, system_prompt)
+        return await _run_agent_loop(
+            "huggingface",
+            HF_API_BASE,
+            HF_TOKEN,
+            user_text,
+            history,
+            model,
+            max_steps,
+            system_prompt,
+        )
+    if provider == "google":
+        return await _run_agent_loop(
+            "google",
+            GOOGLE_API_BASE,
+            GOOGLE_API_KEY,
+            user_text,
+            history,
+            model,
+            max_steps,
+            system_prompt,
+        )
     raise ValueError(f"Unsupported model provider: {provider}")
 
 
