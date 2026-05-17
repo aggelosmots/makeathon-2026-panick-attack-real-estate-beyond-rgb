@@ -229,24 +229,15 @@ function renderFigures(result) {
   const output = $("#figures-output");
   if (!output) return;
 
-  const metrics = extractMetrics(result?.content || "");
   const plots = extractPlotOutputs(result);
-  if (!metrics.length && !plots.length) {
+  if (!plots.length) {
     output.classList.add("hidden");
     output.innerHTML = "";
     return;
   }
 
-  const rows = [
-    ["Mean NDVI", "ndvi"],
-    ["Healthy Coverage", "coverage"],
-    ["Uniformity", "uniformity"],
-  ];
   output.classList.remove("hidden");
-  output.innerHTML = [
-    ...plots.map(plotCard),
-    ...rows.map(([title, key]) => figureCard(title, metrics, key)),
-  ].join("");
+  output.innerHTML = plots.map(plotCard).join("");
 }
 
 function extractPlotOutputs(result) {
